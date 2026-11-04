@@ -3,7 +3,7 @@
 ## [0.3.288](https://github.com/UKGovernmentBEIS/inspect_ai/compare/0.3.287...0.3.288) (2026-11-04)
 
 
-### ⚠ BREAKING CHANGES
+### Breaking Changes
 
 * Evaluations using the automatically generated Docker sandbox must provide an explicit image if they need the `nonroot` account, `pipx`, or Playwright browser dependencies.
 * Replace calls to `web_browser()` or its `web_browser_tools()` alias with `web_search()` for retrieval, or `computer()` / sandbox MCP tools for browser interaction; see #5497 for migration options.
