@@ -76,9 +76,10 @@ byte-identical to before.
 ## Old logs
 
 Logs written before this fix already contain `null` where NaN was meant:
-dict leaves reload as `None` (and miscount as `0.0`), and list elements fail
-validation. That corruption happened at write time and is not recoverable
-with certainty (see ambiguity above). Any backward-compat coercion should be
+dict leaves reload as `None`, and list elements fail validation. Dict-metric
+expansion in `results.py` counts a `None` leaf as unscored, the same as NaN,
+and dict epoch reducers skip it. That corruption happened at write time and is
+not recoverable with certainty (see ambiguity above). Any backward-compat coercion should be
 scoped to deserialization and, ideally, to list/scalar positions where a
 `null` is provably a serialization artifact (`None` is unconstructible
 there).
