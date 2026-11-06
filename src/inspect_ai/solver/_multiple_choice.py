@@ -116,11 +116,17 @@ def parse_answers(state: TaskState, multiple_correct: bool) -> set[str]:
 
     # If we couldn't match the strict version, we can try the less strict
     # version for backward compatibility
+    lenient_tail = ""
     if not matches:
-        matches = re.findall(
-            r"(?i)ANSWER\s*:\s*([A-Za-z\d ,]+)(?:[^\w]|\n|$|\.)",
-            completion,
+        lenient = list(
+            re.finditer(
+                r"(?i)ANSWER\s*:\s*([A-Za-z\d ,]+)(?:[^\w]|\n|$|\.)",
+                completion,
+            )
         )
+        matches = [m.group(1) for m in lenient]
+        if lenient:
+            lenient_tail = completion[lenient[-1].end(1) :]
 
     if not matches:
         return set()
@@ -134,6 +140,12 @@ def parse_answers(state: TaskState, multiple_correct: bool) -> set[str]:
     matched = matched.upper()
 
     allowed_options = set(answer_character(i) for i in range(len(state.choices)))
+
+    separated = _separated_choice_labels(lenient_tail)
+    if separated:
+        if not multiple_correct:
+            return set()
+        matched = ",".join([matched, *separated])
 
     if multiple_correct:
         # Match must contain only the allowed choices
@@ -163,6 +175,30 @@ def parse_answers(state: TaskState, multiple_correct: bool) -> set[str]:
             return answers
 
     return set()
+
+
+_SEPARATED_LABEL = re.compile(
+    r"[ \t]*[/&;+|][ \t]*([A-Za-z]|\d+)"
+    r"(?=[ \t]*(?:[/&;+|]|[.!?]?[ \t]*(?:\r?\n|$)))"
+)
+
+
+def _separated_choice_labels(tail: str) -> list[str]:
+    """Choice labels that follow an extracted answer after `/`, `&`, `;`, `+` or `|`.
+
+    The lenient `ANSWER:` regex stops at the first non-word character, so for
+    `ANSWER: A/B` it extracts only `A`. Returning the remaining labels lets the
+    caller treat the answer as naming several choices instead of only the first.
+    A label counts only when the answer ends after it (another separator, or
+    optional `.!?` then end of line), so explanations such as
+    `B; a reasonable guess` or `B; A is a distractor` are not read as labels.
+    """
+    labels: list[str] = []
+    pos = 0
+    while match := _SEPARATED_LABEL.match(tail, pos):
+        labels.append(match.group(1).upper())
+        pos = match.end()
+    return labels
 
 
 def set_choices_based_on_generated_response(

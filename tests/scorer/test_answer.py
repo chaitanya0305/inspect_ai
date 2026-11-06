@@ -115,6 +115,55 @@ async def test_letter_last_occurrence_wins():
     assert result.text == CORRECT
 
 
+@pytest.mark.parametrize(
+    "model_output",
+    [
+        "ANSWER: A/B",
+        "ANSWER: A / B",
+        "ANSWER: A & B",
+        "ANSWER: A; B",
+        "ANSWER: A + B",
+        "ANSWER: A | B",
+        "ANSWER: A or B",
+        "ANSWER: a OR b.",
+        "ANSWER: A/B\nBoth seem plausible.",
+    ],
+)
+@pytest.mark.anyio
+async def test_letter_hedged_answer_is_not_first_letter(model_output: str):
+    scorer = answer("letter")
+    state = simple_task_state(model_output=model_output)
+    result = await scorer(state, Target(["A"]))
+
+    assert result is not None
+    assert result.text == INCORRECT
+
+
+@pytest.mark.parametrize(
+    "model_output",
+    [
+        "ANSWER: B) Paris",
+        "ANSWER: B (I think)",
+        "ANSWER: B; it is the capital",
+        "ANSWER: B / Paris",
+        "ANSWER: B or so",
+        "ANSWER: B.",
+        "ANSWER: B; I think so",
+        "ANSWER: B; A is a distractor",
+        "ANSWER: B & a few others",
+    ],
+)
+@pytest.mark.anyio
+async def test_letter_followed_by_text_keeps_letter(model_output: str):
+    scorer = answer("letter")
+    state = simple_task_state(model_output=model_output)
+    result = await scorer(state, Target(["B"]))
+
+    assert result is not None
+    assert result.answer == "B"
+    assert result.text == CORRECT
+
+
 @pytest.mark.anyio
 async def test_word_last_occurrence_wins():
     scorer = answer("word")
