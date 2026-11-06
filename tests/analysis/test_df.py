@@ -2,6 +2,7 @@ import gc
 import tempfile
 import weakref
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -418,6 +419,12 @@ def test_messages_df_filter():
     assert len(df) == 14
 
 
+def test_messages_df_non_callable_filter_raises() -> None:
+    role_list: Any = ["assistant"]
+    with pytest.raises(TypeError, match="messages_df"):
+        messages_df(LOGS_DIR, filter=role_list)
+
+
 def test_events_df():
     df = events_df(LOGS_DIR)
     assert len(df) == 124
@@ -437,6 +444,12 @@ def test_events_df_columns():
 def test_events_df_filter():
     df = events_df(LOGS_DIR, filter=lambda e: e.event == "tool")
     assert len(df) == 4
+
+
+def test_events_df_non_callable_filter_raises() -> None:
+    event_list: Any = ["model"]
+    with pytest.raises(TypeError, match="events_df"):
+        events_df(LOGS_DIR, filter=event_list)
 
 
 def test_events_df_model_event_requested_model(tmp_path: Path):

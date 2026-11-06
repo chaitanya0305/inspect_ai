@@ -58,7 +58,8 @@ def events_df(
           Defaults to the contents of the currently active log directory
           (e.g. ./logs or INSPECT_LOG_DIR).
        columns: Specification for what columns to read from log files.
-       filter: Callable that filters event types.
+       filter: Callable that takes an `Event` and returns `True` to include
+          it. Raises `TypeError` if not callable.
        strict: Raise import errors immediately. Defaults to `True`.
           If `False` then a tuple of `DataFrame` and errors is returned.
        parallel: If `True`, use `ProcessPoolExecutor` to read logs in parallel
@@ -75,8 +76,12 @@ def events_df(
     """
     verify_prerequisites()
 
-    # resolve filter/detail
-    detail = EventsDetail(filter=filter) if callable(filter) else EventsDetail()
+    if filter is not None and not callable(filter):
+        raise TypeError(
+            "events_df() filter must be a callable taking an Event, e.g. "
+            f"`lambda e: e.event == 'model'` (got {type(filter).__name__})."
+        )
+    detail = EventsDetail(filter=filter)
     quiet = quiet if quiet is not None else running_in_notebook()
     logs = resolve_logs(logs)
 
