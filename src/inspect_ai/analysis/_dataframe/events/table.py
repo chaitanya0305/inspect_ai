@@ -78,8 +78,10 @@ def events_df(
 
     if filter is not None and not callable(filter):
         raise TypeError(
-            "events_df() filter must be a callable taking an Event, e.g. "
-            f"`lambda e: e.event == 'model'` (got {type(filter).__name__})."
+            "events_df() filter must be a function that takes an Event and "
+            "returns True to include it (got "
+            f"{type(filter).__name__}). Use a module-level function rather than a "
+            "lambda if parallel=True, since the filter must be picklable."
         )
     detail = EventsDetail(filter=filter)
     quiet = quiet if quiet is not None else running_in_notebook()

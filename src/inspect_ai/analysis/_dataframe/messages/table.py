@@ -78,8 +78,10 @@ def messages_df(
 
     if filter is not None and not callable(filter):
         raise TypeError(
-            "messages_df() filter must be a callable taking a ChatMessage, e.g. "
-            f"`lambda m: m.role == 'assistant'` (got {type(filter).__name__})."
+            "messages_df() filter must be a function that takes a ChatMessage and "
+            "returns True to include it (got "
+            f"{type(filter).__name__}). Use a module-level function rather than a "
+            "lambda if parallel=True, since the filter must be picklable."
         )
     detail = MessagesDetail(filter=filter)
     quiet = quiet if quiet is not None else running_in_notebook()
