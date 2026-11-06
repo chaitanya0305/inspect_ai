@@ -623,7 +623,7 @@ Note that `samples_df()` also includes `id` and `epoch` fields that serve distin
 
 The `messages_df()` function enables reading message level data from a set of eval logs. Each row corresponds to a message, and includes a `sample_id` and `eval_id` for linking back to its parents.
 
-The `messages_df()` function takes a `filter` parameter which can provide a function that performs filtering. For example, to read only assistant messages:
+The `messages_df()` function takes a `filter` parameter: a function that receives a `ChatMessage` and returns `True` to include it. Use a module-level function rather than a lambda if you read with `parallel=True`, since the filter must be picklable. For example, to read only assistant messages:
 
 ``` python
 from inspect_ai.model import ChatMessage
