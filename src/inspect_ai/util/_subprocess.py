@@ -440,10 +440,14 @@ async def gracefully_terminate_cancelled_subprocess(process: Process) -> None:
             # https://docs.python.org/3/library/asyncio-subprocess.html#asyncio.subprocess.Process.wait
             # Therefore, we need to ensure that the process's stdout and stderr streams
             # are drained before we call process.wait() in aclose().
-            with anyio.move_on_after(SUBPROCESS_DRAIN_TIMEOUT_SECONDS):
+            with anyio.move_on_after(SUBPROCESS_DRAIN_TIMEOUT_SECONDS) as drain:
                 async with create_task_group() as tg:
                     tg.start_soon(drain_stream, process.stdout)
                     tg.start_soon(drain_stream, process.stderr)
+            # asyncio's wait() can also wait for the pipes to close, which a
+            # background child holding them would delay.
+            if drain.cancelled_caught:
+                _close_pipe_transports(process)
             # Bounded: see LOST_SUBPROCESS_WAIT_TIMEOUT.
             with anyio.move_on_after(LOST_SUBPROCESS_WAIT_TIMEOUT) as scope:
                 await process.wait()
