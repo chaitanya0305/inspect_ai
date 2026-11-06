@@ -1,5 +1,4 @@
 import abc
-import operator
 import random
 from dataclasses import dataclass, field
 from typing import (
@@ -336,14 +335,7 @@ class MemoryDataset(Dataset):
                 location=self.location,
                 shuffled=self.shuffled,
             )
-        try:
-            position = operator.index(index)
-        except TypeError:
-            raise TypeError(
-                "MemoryDataset indices must be integers or slices, "
-                f"not {type(index).__name__}"
-            ) from None
-        return self.samples[position]
+        return self.samples[index]
 
     @override
     def __len__(self) -> int:

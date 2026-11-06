@@ -455,9 +455,20 @@ def memory_dataset_for_indexing() -> MemoryDataset:
     return MemoryDataset([Sample(input=f"q{i}", id=i) for i in range(5)])
 
 
+class _Index:
+    def __index__(self) -> int:
+        return 3
+
+
 @pytest.mark.parametrize(
     "index,expected_id",
-    [(np.int64(1), 1), (np.int32(3), 3), (np.int64(-1), 4), (np.array(2), 2)],
+    [
+        (np.int64(1), 1),
+        (np.int32(3), 3),
+        (np.int64(-1), 4),
+        (np.array(2), 2),
+        (_Index(), 3),
+    ],
 )
 def test_memory_dataset_numpy_integer_index(index: Any, expected_id: int) -> None:
     sample = memory_dataset_for_indexing()[index]
@@ -473,10 +484,17 @@ def test_memory_dataset_slice_index() -> None:
     assert [sample.id for sample in dataset] == [1, 2]
 
 
-@pytest.mark.parametrize("index", [[0, 2], np.array([0, 2]), (0,), "a", 1.0])
+@pytest.mark.parametrize(
+    "index", [[0, 2], np.array([0, 2]), (0,), "a", 1.0, np.bool_(True)]
+)
 def test_memory_dataset_invalid_index_raises(index: Any) -> None:
-    with pytest.raises(TypeError, match="MemoryDataset indices"):
+    with pytest.raises(TypeError):
         memory_dataset_for_indexing()[index]
+
+
+def test_memory_dataset_numpy_index_out_of_range_raises() -> None:
+    with pytest.raises(IndexError):
+        memory_dataset_for_indexing()[np.int64(5)]
 
 
 @skip_if_github_action
