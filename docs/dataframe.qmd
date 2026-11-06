@@ -433,7 +433,7 @@ EvalColumn("task_arg_*", path="eval.task_args")
 EvalColumn("score_*_*", path=eval_log_scores_dict)
 ```
 
-Note that scores are a two-level dictionary of `score_<scorer>_<metric>` and are extracted using a custom function. If you want to handle scores a different way you can build your own set of eval columns with a custom scores handler. For example, here we take a subset of eval columns along with our own custom handler (`custom_scores_fn`) for scores:
+Note that scores are a two-level dictionary of `score_<scorer>_<metric>` and are extracted using a custom function. When two scores would produce the same column, the reducer name is appended to the score name (`score_<name>_<reducer>_<metric>`) and, if the columns still collide across scorers, the scorer name is prepended (`score_<scorer>_<name>_<metric>`). If you want to handle scores a different way you can build your own set of eval columns with a custom scores handler. For example, here we take a subset of eval columns along with our own custom handler (`custom_scores_fn`) for scores:
 
 ``` python
 evals_df(

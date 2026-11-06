@@ -2,7 +2,7 @@ from typing import cast
 
 from inspect_ai._util.path import native_path
 from inspect_ai.log._headline import headline_metric
-from inspect_ai.log._log import EvalLog
+from inspect_ai.log._log import EvalLog, EvalScore
 
 from ..extract import remove_namespace
 
@@ -22,31 +22,40 @@ def eval_log_scores_dict(
     log: EvalLog,
 ) -> list[dict[str, dict[str, int | float]]] | None:
     if log.results is not None:
-        # Only disambiguate when the base `score_<name>_<metric>` column would
-        # collide, so logs without a collision keep their existing column names.
-        # Within a colliding group, prefix the scorer when scores come from
-        # different scorers (e.g. two judges reporting `correct`) and suffix the
-        # reducer when they use different reducers (e.g.
-        # epochs_reducer=["mean","max"]). Mixed reduced/unreduced views often
-        # have different metric keys, so they usually don't collide at all.
-        column_scorers: dict[tuple[str, str], set[str]] = {}
-        column_reducers: dict[tuple[str, str], set[str | None]] = {}
+        # Only disambiguate columns that would otherwise collide, so columns that
+        # are already distinct keep their names. First suffix the reducer when
+        # `score_<name>_<metric>` collides (e.g. epochs_reducer=["mean","max"]).
+        # Mixed reduced/unreduced views often have different metric keys, so
+        # they usually keep `score_<name>_<metric>`. Then, if that column still
+        # collides across scorers (e.g. two judges reporting `correct`), prefix
+        # the scorer name.
+        column_counts: dict[tuple[str, str], int] = {}
         for score in log.results.scores:
             for metric_key in score.metrics.keys():
                 column_key = (score.name, metric_key)
+                column_counts[column_key] = column_counts.get(column_key, 0) + 1
+
+        def reducer_key(score: EvalScore, metric_key: str) -> str:
+            return (
+                f"{score.name}_{score.reducer}"
+                if column_counts[(score.name, metric_key)] > 1
+                and score.reducer is not None
+                else score.name
+            )
+
+        column_scorers: dict[tuple[str, str], set[str]] = {}
+        for score in log.results.scores:
+            for metric_key in score.metrics.keys():
+                column_key = (reducer_key(score, metric_key), metric_key)
                 column_scorers.setdefault(column_key, set()).add(score.scorer)
-                column_reducers.setdefault(column_key, set()).add(score.reducer)
 
         metrics: list[dict[str, dict[str, int | float]]] = []
         for score in log.results.scores:
             score_metrics: dict[str, dict[str, int | float]] = {}
             for metric_key, metric in score.metrics.items():
-                column_key = (score.name, metric_key)
-                score_key = score.name
-                if len(column_scorers[column_key]) > 1:
+                score_key = reducer_key(score, metric_key)
+                if len(column_scorers[(score_key, metric_key)]) > 1:
                     score_key = f"{score.scorer}_{score_key}"
-                if len(column_reducers[column_key]) > 1 and score.reducer is not None:
-                    score_key = f"{score_key}_{score.reducer}"
                 score_metrics.setdefault(score_key, {})[metric_key] = metric.value
             metrics.append(score_metrics)
         return metrics

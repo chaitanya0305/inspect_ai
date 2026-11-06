@@ -245,7 +245,8 @@ def test_evals_df_scores_with_mixed_score_view_metric_collision():
 
 
 def _scores_log(
-    scores: list[tuple[str, str, str | None, float]], epochs_reducer: list[str] | None
+    scores: list[tuple[str, str, str | None, dict[str, float]]],
+    epochs_reducer: list[str] | None,
 ) -> EvalLog:
     from inspect_ai.log._log import (
         EvalConfig,
@@ -271,12 +272,23 @@ def _scores_log(
                     name=name,
                     scorer=scorer_name,
                     reducer=reducer,
-                    metrics={"mean": EvalMetric(name="mean", value=value)},
+                    metrics={
+                        key: EvalMetric(name=key, value=value)
+                        for key, value in metrics.items()
+                    },
                 )
-                for name, scorer_name, reducer, value in scores
+                for name, scorer_name, reducer, metrics in scores
             ]
         ),
     )
+
+
+def _score_columns(df: pd.DataFrame) -> dict[str, float]:
+    return {
+        c: df.iloc[0][c]
+        for c in df.columns
+        if c.startswith("score_") and not c.startswith("score_headline_")
+    }
 
 
 def test_evals_df_scores_with_scorer_collision():
@@ -308,57 +320,93 @@ def test_evals_df_scores_with_scorer_collision():
         )[0]
         df = evals_df(log.location, quiet=True)
 
-    score_columns = [
-        c for c in df.columns if c.startswith("score_") and "headline" not in c
-    ]
-    assert sorted(score_columns) == [
-        "score_judge_a_correct_mean",
-        "score_judge_b_correct_mean",
-    ]
-    assert df.iloc[0]["score_judge_a_correct_mean"] == 1.0
-    assert df.iloc[0]["score_judge_b_correct_mean"] == 0.0
+    assert _score_columns(df) == {
+        "score_judge_a_correct_mean": 1.0,
+        "score_judge_b_correct_mean": 0.0,
+    }
 
 
 def test_evals_df_scores_without_collision_keep_score_name():
     """Distinct score names from different scorers keep `score_<name>_<metric>`."""
     log = _scores_log(
-        [("correct", "judge", None, 1.0), ("helpful", "judge", None, 0.5)],
+        [
+            ("correct", "judge", None, {"mean": 1.0}),
+            ("helpful", "judge", None, {"mean": 0.5}),
+        ],
         epochs_reducer=None,
     )
-    df = evals_df([log], quiet=True)
-    assert "score_correct_mean" in df.columns
-    assert "score_helpful_mean" in df.columns
-    assert "score_judge_correct_mean" not in df.columns
-    assert df.iloc[0]["score_correct_mean"] == 1.0
-    assert df.iloc[0]["score_helpful_mean"] == 0.5
+    assert _score_columns(evals_df([log], quiet=True)) == {
+        "score_correct_mean": 1.0,
+        "score_helpful_mean": 0.5,
+    }
+
+
+def test_evals_df_scores_scorer_prefix_only_on_colliding_metrics():
+    """Only metric columns that collide across scorers get the scorer prefix."""
+    log = _scores_log(
+        [
+            ("correct", "judge_a", None, {"mean": 1.0, "stderr": 0.1}),
+            ("correct", "judge_b", None, {"mean": 0.0}),
+        ],
+        epochs_reducer=None,
+    )
+    assert _score_columns(evals_df([log], quiet=True)) == {
+        "score_judge_a_correct_mean": 1.0,
+        "score_judge_b_correct_mean": 0.0,
+        "score_correct_stderr": 0.1,
+    }
+
+
+def test_evals_df_scores_reducer_suffix_avoids_scorer_prefix():
+    """Columns already made distinct by the reducer suffix keep their names.
+
+    judge_a has reduced and unreduced score views (reducer="mean" and None),
+    judge_b only an unreduced one; the reducer suffix already separates them.
+    """
+    log = _scores_log(
+        [
+            ("correct", "judge_a", "mean", {"mean": 1.0}),
+            ("correct", "judge_a", None, {"n_obs": 2.0}),
+            ("correct", "judge_b", None, {"mean": 0.0}),
+        ],
+        epochs_reducer=None,
+    )
+    assert _score_columns(evals_df([log], quiet=True)) == {
+        "score_correct_mean_mean": 1.0,
+        "score_correct_n_obs": 2.0,
+        "score_correct_mean": 0.0,
+    }
 
 
 def test_evals_df_scores_with_scorer_and_reducer_collision():
-    """Scorer and reducer qualifiers are each added only when they differ."""
+    """Scorer prefix is added when the reducer-suffixed column still collides."""
     log = _scores_log(
         [
-            ("correct", "judge_a", "mean", 0.1),
-            ("correct", "judge_a", "max", 0.2),
-            ("correct", "judge_b", "mean", 0.3),
-            ("correct", "judge_b", "max", 0.4),
+            ("correct", "judge_a", "mean", {"mean": 0.1}),
+            ("correct", "judge_a", "max", {"mean": 0.2}),
+            ("correct", "judge_b", "mean", {"mean": 0.3}),
+            ("correct", "judge_b", "max", {"mean": 0.4}),
         ],
         epochs_reducer=["mean", "max"],
     )
-    df = evals_df([log], quiet=True)
-    assert df.iloc[0]["score_judge_a_correct_mean_mean"] == 0.1
-    assert df.iloc[0]["score_judge_a_correct_max_mean"] == 0.2
-    assert df.iloc[0]["score_judge_b_correct_mean_mean"] == 0.3
-    assert df.iloc[0]["score_judge_b_correct_max_mean"] == 0.4
+    assert _score_columns(evals_df([log], quiet=True)) == {
+        "score_judge_a_correct_mean_mean": 0.1,
+        "score_judge_a_correct_max_mean": 0.2,
+        "score_judge_b_correct_mean_mean": 0.3,
+        "score_judge_b_correct_max_mean": 0.4,
+    }
 
-    # one reducer shared by both scorers: only the scorer qualifier is needed
     log = _scores_log(
-        [("correct", "judge_a", "mean", 0.1), ("correct", "judge_b", "mean", 0.3)],
+        [
+            ("correct", "judge_a", "mean", {"mean": 0.1}),
+            ("correct", "judge_b", "mean", {"mean": 0.3}),
+        ],
         epochs_reducer=["mean"],
     )
-    df = evals_df([log], quiet=True)
-    assert df.iloc[0]["score_judge_a_correct_mean"] == 0.1
-    assert df.iloc[0]["score_judge_b_correct_mean"] == 0.3
-    assert "score_correct_mean_mean" not in df.columns
+    assert _score_columns(evals_df([log], quiet=True)) == {
+        "score_judge_a_correct_mean_mean": 0.1,
+        "score_judge_b_correct_mean_mean": 0.3,
+    }
 
 
 def test_evals_df_headline_metric_uses_metric_key():
