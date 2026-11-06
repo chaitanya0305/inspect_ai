@@ -47,7 +47,7 @@ from inspect_ai.log import (
 )
 from inspect_ai.model import ChatMessage, ChatMessageUser, ModelOutput, get_model
 from inspect_ai.model._model import requested_model
-from inspect_ai.scorer import Score, Scorer, Target, scorer
+from inspect_ai.scorer import Score, Scorer, Target, mean, scorer
 from inspect_ai.solver import Generate, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, tool
 
@@ -242,6 +242,123 @@ def test_evals_df_scores_with_mixed_score_view_metric_collision():
     assert "score_match_accuracy" in df.columns
     assert df.iloc[0]["score_match_mean_accuracy"] == 0.50
     assert df.iloc[0]["score_match_accuracy"] == 0.75
+
+
+def _scores_log(
+    scores: list[tuple[str, str, str | None, float]], epochs_reducer: list[str] | None
+) -> EvalLog:
+    from inspect_ai.log._log import (
+        EvalConfig,
+        EvalDataset,
+        EvalMetric,
+        EvalResults,
+        EvalScore,
+        EvalSpec,
+    )
+
+    return EvalLog(
+        status="success",
+        eval=EvalSpec(
+            created="2024-01-01T00:00:00+00:00",
+            task="t",
+            dataset=EvalDataset(),
+            model="test/model",
+            config=EvalConfig(epochs=2, epochs_reducer=epochs_reducer),
+        ),
+        results=EvalResults(
+            scores=[
+                EvalScore(
+                    name=name,
+                    scorer=scorer_name,
+                    reducer=reducer,
+                    metrics={"mean": EvalMetric(name="mean", value=value)},
+                )
+                for name, scorer_name, reducer, value in scores
+            ]
+        ),
+    )
+
+
+def test_evals_df_scores_with_scorer_collision():
+    """Two scorers reporting the same score name each keep their metrics."""
+
+    @scorer(metrics={"correct": [mean()]})
+    def judge_a() -> Scorer:
+        async def score(state: TaskState, target: Target) -> Score:
+            return Score(value={"correct": 1.0})
+
+        return score
+
+    @scorer(metrics={"correct": [mean()]})
+    def judge_b() -> Scorer:
+        async def score(state: TaskState, target: Target) -> Score:
+            return Score(value={"correct": 0.0})
+
+        return score
+
+    with tempfile.TemporaryDirectory() as log_dir:
+        log = eval(
+            Task(
+                dataset=[Sample(input="x", target="y")],
+                scorer=[judge_a(), judge_b()],
+            ),
+            model="mockllm/model",
+            log_dir=log_dir,
+            display="none",
+        )[0]
+        df = evals_df(log.location, quiet=True)
+
+    score_columns = [
+        c for c in df.columns if c.startswith("score_") and "headline" not in c
+    ]
+    assert sorted(score_columns) == [
+        "score_judge_a_correct_mean",
+        "score_judge_b_correct_mean",
+    ]
+    assert df.iloc[0]["score_judge_a_correct_mean"] == 1.0
+    assert df.iloc[0]["score_judge_b_correct_mean"] == 0.0
+
+
+def test_evals_df_scores_without_collision_keep_score_name():
+    """Distinct score names from different scorers keep `score_<name>_<metric>`."""
+    log = _scores_log(
+        [("correct", "judge", None, 1.0), ("helpful", "judge", None, 0.5)],
+        epochs_reducer=None,
+    )
+    df = evals_df([log], quiet=True)
+    assert "score_correct_mean" in df.columns
+    assert "score_helpful_mean" in df.columns
+    assert "score_judge_correct_mean" not in df.columns
+    assert df.iloc[0]["score_correct_mean"] == 1.0
+    assert df.iloc[0]["score_helpful_mean"] == 0.5
+
+
+def test_evals_df_scores_with_scorer_and_reducer_collision():
+    """Scorer and reducer qualifiers are each added only when they differ."""
+    log = _scores_log(
+        [
+            ("correct", "judge_a", "mean", 0.1),
+            ("correct", "judge_a", "max", 0.2),
+            ("correct", "judge_b", "mean", 0.3),
+            ("correct", "judge_b", "max", 0.4),
+        ],
+        epochs_reducer=["mean", "max"],
+    )
+    df = evals_df([log], quiet=True)
+    assert df.iloc[0]["score_judge_a_correct_mean_mean"] == 0.1
+    assert df.iloc[0]["score_judge_a_correct_max_mean"] == 0.2
+    assert df.iloc[0]["score_judge_b_correct_mean_mean"] == 0.3
+    assert df.iloc[0]["score_judge_b_correct_max_mean"] == 0.4
+
+    # one reducer shared by both scorers: only the scorer qualifier is needed
+    log = _scores_log(
+        [("correct", "judge_a", "mean", 0.1), ("correct", "judge_b", "mean", 0.3)],
+        epochs_reducer=["mean"],
+    )
+    df = evals_df([log], quiet=True)
+    assert df.iloc[0]["score_judge_a_correct_mean"] == 0.1
+    assert df.iloc[0]["score_judge_b_correct_mean"] == 0.3
+    assert "score_correct_mean_mean" not in df.columns
 
 
 def test_evals_df_headline_metric_uses_metric_key():
