@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from os.path import dirname, join
 from pathlib import Path
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Literal, cast
 
 import anyio
 import boto3
@@ -59,6 +59,30 @@ def test_list_logs():
 
     assert len(logs) == 3
     assert all(file not in names for file in ignored_files)
+
+
+LOG_FORMAT_CASES: list[tuple[list[Literal["eval", "json"]] | None, set[str]]] = [
+    (["json"], {".json"}),
+    (["eval"], {".eval"}),
+    (["eval", "json"], {".eval", ".json"}),
+    (None, {".eval", ".json"}),
+]
+
+
+@pytest.mark.parametrize(("formats", "suffixes"), LOG_FORMAT_CASES)
+def test_list_logs_formats(
+    formats: list[Literal["eval", "json"]] | None, suffixes: set[str]
+) -> None:
+    logs = list_eval_logs(log_dir, formats=formats)
+    assert {Path(log.name).suffix for log in logs} == suffixes
+
+
+@pytest.mark.parametrize(("formats", "suffixes"), LOG_FORMAT_CASES)
+async def test_list_logs_async_formats(
+    formats: list[Literal["eval", "json"]] | None, suffixes: set[str]
+) -> None:
+    logs = await list_eval_logs_async(log_dir, formats=formats)
+    assert {Path(log.name).suffix for log in logs} == suffixes
 
 
 @pytest.mark.parametrize("recursive", [False, True])

@@ -1145,7 +1145,7 @@ def _filter_log_files(
     descending: bool,
     sort: bool,
 ) -> list[FileInfo]:
-    extensions = [f".{format}" for format in (formats or ALL_LOG_FORMATS)]
+    extensions = tuple(f".{format}" for format in (formats or ALL_LOG_FORMATS))
     ordered = (
         sorted(
             ls,
@@ -1155,10 +1155,14 @@ def _filter_log_files(
         if sort
         else ls
     )
+    # is_log_file accepts any .eval name regardless of extensions, so the
+    # requested formats are applied separately.
     return [
         file
         for file in ordered
-        if file.type == "file" and is_log_file(file.name, extensions)
+        if file.type == "file"
+        and file.name.endswith(extensions)
+        and is_log_file(file.name, list(extensions))
     ]
 
 
