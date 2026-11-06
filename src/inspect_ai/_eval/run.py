@@ -221,11 +221,17 @@ async def eval_run(
 
         # ensure sample ids
         for resolved_task in resolved_tasks:
-            # add sample ids to dataset if they aren't there (start at 1 not 0)
+            # add sample ids to dataset if they aren't there (start at 1 not 0),
+            # skipping ids already in use as reserve_runs() does for sample sources
             task = resolved_task.task
-            for id, sample in enumerate(task.dataset):
+            taken_ids = {str(s.id) for s in task.dataset if s.id is not None}
+            for index, sample in enumerate(task.dataset):
                 if sample.id is None:
-                    sample.id = id + 1
+                    auto_id = index + 1
+                    while str(auto_id) in taken_ids:
+                        auto_id += 1
+                    sample.id = auto_id
+                    taken_ids.add(str(auto_id))
 
             # Ensure sample ids are unique
             ensure_unique_ids(task.dataset)

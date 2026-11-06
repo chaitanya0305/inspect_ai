@@ -1050,6 +1050,25 @@ def test_csv_blank_id_cells_get_auto_ids_in_eval(tmp_path: Path) -> None:
     assert {sample.id for sample in log.samples} == {"q-1", 2, 3}
 
 
+def test_auto_id_skips_ids_already_in_dataset(tmp_path: Path) -> None:
+    from inspect_ai import Task, eval
+    from inspect_ai.scorer import match
+
+    # the blank row is third, so its position-based id 3 is already taken
+    csv_file = tmp_path / "data.csv"
+    csv_file.write_text("id,input,target\n0,a,a\n1,b,b\n,c,c\n3,d,d\n")
+
+    log = eval(
+        Task(dataset=csv_dataset(str(csv_file)), scorer=match()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )[0]
+    assert log.status == "success"
+    assert log.samples is not None
+    assert {sample.id for sample in log.samples} == {"0", "1", 4, "3"}
+
+
 def test_dataset_zero_seed() -> None:
     dataset1 = json_dataset(dataset_path("dataset.jsonl"), shuffle=True, seed=0)
     dataset2 = json_dataset(dataset_path("dataset.jsonl"), shuffle=True, seed=0)
