@@ -93,7 +93,7 @@ def record_to_sample_fn(
                         f"Unexpected type for 'metadata' field: {type(metadata_field)}"
                     )
 
-            sample_id = record.get(sample_fields.id, None)
+            sample_id = read_id(record.get(sample_fields.id, None))
             try:
                 choices = read_choices(record.get(sample_fields.choices))
             except ValueError as ex:
@@ -262,6 +262,15 @@ def _drop_trailing_blank_choices(choices: list[str], source: object) -> list[str
             "or use a custom sample_fields function to keep the blank."
         )
     return kept
+
+
+def read_id(id: Any | None) -> Any | None:
+    """Read a sample ``id`` field, treating an empty string as missing.
+
+    Empty CSV cells read as ``""``. A missing id gets a position-based id at
+    eval time, while ``""`` would be kept and collide across blank rows.
+    """
+    return None if isinstance(id, str) and id == "" else id
 
 
 def read_description(description: Any | None) -> str | None:

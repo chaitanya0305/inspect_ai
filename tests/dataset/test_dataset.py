@@ -1011,6 +1011,45 @@ def test_csv_null_checkpoint_cell_is_missing(tmp_path: Path) -> None:
     assert csv_dataset(str(csv_file))[0].checkpoint is None
 
 
+def test_csv_blank_id_cells_are_missing(tmp_path: Path) -> None:
+    csv_file = tmp_path / "data.csv"
+    csv_file.write_text("id,input,target\nq-1,1+1,2\n,2+2,4\n,3+3,6\n0,4+4,8\n")
+
+    assert [sample.id for sample in csv_dataset(str(csv_file))] == [
+        "q-1",
+        None,
+        None,
+        "0",
+    ]
+
+
+def test_dataset_empty_string_id_is_missing() -> None:
+    from inspect_ai.dataset._util import record_to_sample_fn
+
+    rec2sample = record_to_sample_fn(FieldSpec(id="key"))
+    sample = rec2sample({"key": "", "input": "x", "target": "y"})
+    assert not isinstance(sample, list)
+    assert sample.id is None
+
+
+def test_csv_blank_id_cells_get_auto_ids_in_eval(tmp_path: Path) -> None:
+    from inspect_ai import Task, eval
+    from inspect_ai.scorer import match
+
+    csv_file = tmp_path / "data.csv"
+    csv_file.write_text("id,input,target\nq-1,1+1,2\n,2+2,4\n,3+3,6\n")
+
+    log = eval(
+        Task(dataset=csv_dataset(str(csv_file)), scorer=match()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )[0]
+    assert log.status == "success"
+    assert log.samples is not None
+    assert {sample.id for sample in log.samples} == {"q-1", 2, 3}
+
+
 def test_dataset_zero_seed() -> None:
     dataset1 = json_dataset(dataset_path("dataset.jsonl"), shuffle=True, seed=0)
     dataset2 = json_dataset(dataset_path("dataset.jsonl"), shuffle=True, seed=0)
