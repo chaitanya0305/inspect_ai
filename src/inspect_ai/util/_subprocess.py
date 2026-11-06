@@ -406,6 +406,13 @@ LOST_SUBPROCESS_WAIT_TIMEOUT = 60
 # path can shrink it without waiting the full production grace.
 SUBPROCESS_SIGTERM_GRACE_SECONDS = 2
 
+# Upper bound on draining stdout/stderr after a cancelled process was
+# terminated. A background child of the process inherits those pipes and is
+# not signalled, so EOF can be arbitrarily far off; the drain is shielded, so
+# without a bound it blocks the caller's timeout or cancellation until that
+# child exits. The pipes are closed afterwards in `run_subprocess()`.
+SUBPROCESS_DRAIN_TIMEOUT_SECONDS = 2
+
 
 def _warn_lost_subprocess(process: Process, where: str) -> None:
     logger.warning(
@@ -433,9 +440,10 @@ async def gracefully_terminate_cancelled_subprocess(process: Process) -> None:
             # https://docs.python.org/3/library/asyncio-subprocess.html#asyncio.subprocess.Process.wait
             # Therefore, we need to ensure that the process's stdout and stderr streams
             # are drained before we call process.wait() in aclose().
-            async with create_task_group() as tg:
-                tg.start_soon(drain_stream, process.stdout)
-                tg.start_soon(drain_stream, process.stderr)
+            with anyio.move_on_after(SUBPROCESS_DRAIN_TIMEOUT_SECONDS):
+                async with create_task_group() as tg:
+                    tg.start_soon(drain_stream, process.stdout)
+                    tg.start_soon(drain_stream, process.stderr)
             # Bounded: see LOST_SUBPROCESS_WAIT_TIMEOUT.
             with anyio.move_on_after(LOST_SUBPROCESS_WAIT_TIMEOUT) as scope:
                 await process.wait()

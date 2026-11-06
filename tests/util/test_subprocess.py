@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import gc
 import os
 import shutil
@@ -220,6 +221,85 @@ async def test_subprocess_which_ignores_sigterm_timeout():
     # (1s + 2s grace period + 2s tolerance). If not, it is likely that it was not killed
     # and the process ran to completion.
     assert time.time() - start_time < 5, "Process was not killed in time"
+
+
+def _background_child_command() -> tuple[list[str], list[str]]:
+    """A bash command whose background child outlives it holding stdout/stderr.
+
+    Returns the command and the `sleep` command lines it starts, so the test
+    can kill the leaked background child. Without a bounded drain, cleanup
+    waits for the background `sleep` (15s) to exit and the elapsed-time
+    assertion fails instead of the test hanging.
+    """
+    background = f"sleep {15 + random():.6f}"
+    foreground = f"sleep {20 + random():.6f}"
+    return ["bash", "-c", f"{background} & exec {foreground}"], [
+        background,
+        foreground,
+    ]
+
+
+def _kill_matching(patterns: list[str]) -> None:
+    for p in psutil.process_iter(["cmdline"]):
+        if " ".join(p.info["cmdline"] or []) in patterns:
+            with contextlib.suppress(psutil.NoSuchProcess):
+                p.kill()
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+async def test_subprocess_timeout_with_background_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timeout fires promptly when the command leaves a background child.
+
+    The background child inherits stdout/stderr and is not signalled, so
+    waiting for EOF on those pipes would block until it exits.
+    """
+    monkeypatch.setattr(_subprocess_mod, "SUBPROCESS_SIGTERM_GRACE_SECONDS", 0.2)
+    cmd, sleeps = _background_child_command()
+    try:
+        start = time.monotonic()
+        with pytest.raises(TimeoutError):
+            await subprocess(cmd, timeout=1)
+        elapsed = time.monotonic() - start
+        assert elapsed < 10, f"timeout took {elapsed:.1f}s; drain not bounded?"
+    finally:
+        _kill_matching(sleeps)
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@pytest.mark.skipif(sys.platform == "win32", reason="num_fds() is POSIX only")
+async def test_subprocess_cancel_with_background_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An outer cancel scope ends a subprocess that leaves a background child.
+
+    Cleanup still runs: the direct child is killed and our ends of its pipes
+    are closed although the background child still holds them.
+    """
+    monkeypatch.setattr(_subprocess_mod, "SUBPROCESS_SIGTERM_GRACE_SECONDS", 0.2)
+    cmd, sleeps = _background_child_command()
+    process = psutil.Process()
+    gc.disable()
+    try:
+        fds_before = process.num_fds()
+        start = time.monotonic()
+        with anyio.move_on_after(1) as scope:
+            await subprocess(cmd)
+        elapsed = time.monotonic() - start
+        assert scope.cancelled_caught
+        assert elapsed < 10, f"cancel took {elapsed:.1f}s; drain not bounded?"
+        # asyncio closes a pipe transport's fd on a later loop iteration
+        with anyio.fail_after(5):
+            while process.num_fds() != fds_before:
+                await anyio.sleep(0)
+        assert not _process_found(sleeps[1])
+        assert _process_found(sleeps[0]), "background child should be left running"
+    finally:
+        gc.enable()
+        _kill_matching(sleeps)
 
 
 @pytest.mark.anyio
