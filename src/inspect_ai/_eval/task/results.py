@@ -525,14 +525,19 @@ def scorers_from_metric_dict(
                 continue
             if isinstance(value, dict):
                 if metric_key in value:
-                    # Convert the score into a simple scalar value to apply metrics
-                    metric_score = deepcopy(sample_score)
-                    metric_score.score.value = cast(float, value[metric_key])
-                    if isinstance(metric_score.score.value, float) and math.isnan(
-                        metric_score.score.value
+                    key_value = value[metric_key]
+                    # A None key value is unscored like NaN rather than passed
+                    # to metrics (which would convert it to 0.0). Logs written
+                    # before NaN was serialized as a constant store a NaN key
+                    # value as null, which reloads as None.
+                    if key_value is None or (
+                        isinstance(key_value, float) and math.isnan(key_value)
                     ):
                         unscored_samples += 1
                     else:
+                        # Convert the score into a simple scalar value to apply metrics
+                        metric_score = deepcopy(sample_score)
+                        metric_score.score.value = key_value
                         scored_samples += 1
                         key_scores.append(metric_score)
                 else:

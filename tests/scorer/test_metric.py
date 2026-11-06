@@ -900,6 +900,55 @@ def test_dict_metric_all_samples_unscored():
         assert math.isnan(r.metrics["mean"].value)
 
 
+@pytest.mark.parametrize("missing", [None, float("nan")])
+def test_dict_metric_none_or_nan_key_unscored(missing: float | None):
+    # A None key value (e.g. a NaN leaf from a log written as `null`) is
+    # unscored like a NaN one: skipped by the metric and counted as unscored,
+    # not converted to 0.0. Other keys of the same sample are still scored.
+    from inspect_ai._eval.task.results import scorers_from_metric_dict
+
+    sample_scores = [
+        SampleScore(score=Score(value={"one": 1.0, "two": missing}), sample_id=1),
+        SampleScore(score=Score(value={"one": 0.0, "two": 1.0}), sample_id=2),
+        SampleScore(score=Score(value={"one": 1.0, "two": 1.0}), sample_id=3),
+    ]
+
+    results = scorers_from_metric_dict(
+        scorer_name="test_scorer",
+        scorer_info=_scorer_info_for_dict_metrics(),
+        sample_scores=sample_scores,
+        metrics={"*": [mean()]},
+    )
+
+    by_name = {r.name: r for r in results}
+    assert by_name["one"].metrics["mean"].value == pytest.approx(2 / 3)
+    assert by_name["one"].scored_samples == 3
+    assert by_name["one"].unscored_samples == 0
+    assert by_name["two"].metrics["mean"].value == 1.0
+    assert by_name["two"].scored_samples == 2
+    assert by_name["two"].unscored_samples == 1
+
+
+def test_dict_metric_all_none_key_unscored():
+    from inspect_ai._eval.task.results import scorers_from_metric_dict
+
+    sample_scores = [
+        SampleScore(score=Score(value={"one": 1.0, "two": None}), sample_id=1),
+        SampleScore(score=Score(value={"one": 0.0, "two": None}), sample_id=2),
+    ]
+
+    results = scorers_from_metric_dict(
+        scorer_name="test_scorer",
+        scorer_info=_scorer_info_for_dict_metrics(),
+        sample_scores=sample_scores,
+        metrics={"two": [mean()]},
+    )
+
+    assert results[0].scored_samples == 0
+    assert results[0].unscored_samples == 2
+    assert math.isnan(results[0].metrics["mean"].value)
+
+
 def test_aggregate_mean():
     metric = aggregate("element_acc", agg=mean())
     result = metric(
