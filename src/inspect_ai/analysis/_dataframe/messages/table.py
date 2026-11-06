@@ -58,7 +58,8 @@ def messages_df(
           Defaults to the contents of the currently active log directory
           (e.g. ./logs or INSPECT_LOG_DIR).
        columns: Specification for what columns to read from log files.
-       filter: Callable that filters messages
+       filter: Callable that takes a `ChatMessage` and returns `True` to
+          include it. Raises `TypeError` if not callable.
        strict: Raise import errors immediately. Defaults to `True`.
           If `False` then a tuple of `DataFrame` and errors is returned.
        parallel: If `True`, use `ProcessPoolExecutor` to read logs in parallel
@@ -75,8 +76,12 @@ def messages_df(
     """
     verify_prerequisites()
 
-    # resolve filter/detail
-    detail = MessagesDetail(filter=filter) if callable(filter) else MessagesDetail()
+    if filter is not None and not callable(filter):
+        raise TypeError(
+            "messages_df() filter must be a callable taking a ChatMessage, e.g. "
+            f"`lambda m: m.role == 'assistant'` (got {type(filter).__name__})."
+        )
+    detail = MessagesDetail(filter=filter)
     quiet = quiet if quiet is not None else running_in_notebook()
     logs = resolve_logs(logs)
 
