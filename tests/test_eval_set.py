@@ -2373,6 +2373,104 @@ def test_eval_set_shuffle_reused_without_limit(tmp_path: Path):
     assert logs[0].eval.eval_id == first_eval_id
 
 
+# solver runs counted (and failures switched on) by the duplicate-log tests below
+_toggled_solver_state: dict[str, Any] = {"fail": False, "runs": 0}
+
+
+@solver
+def toggled_failing_solver() -> Solver:
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        _toggled_solver_state["runs"] += 1
+        if _toggled_solver_state["fail"]:
+            raise RuntimeError("toggled failure")
+        return await generate(state)
+
+    return solve
+
+
+@task
+def toggled_task(samples: int = 5) -> Task:
+    return Task(
+        dataset=[
+            Sample(id=f"s{i}", input="Just reply with Hello World", target="Hello")
+            for i in range(samples)
+        ],
+        solver=toggled_failing_solver(),
+        scorer=exact(),
+    )
+
+
+def _reset_toggled(fail: bool) -> None:
+    _toggled_solver_state["fail"] = fail
+    _toggled_solver_state["runs"] = 0
+
+
+@pytest.mark.parametrize("failed_first", [True, False])
+def test_eval_set_reuses_success_log_from_separate_eval_run(
+    tmp_path: Path, failed_first: bool
+) -> None:
+    """A log dir with a failed and a successful `eval()` log of one task.
+
+    The runs have different task ids; eval_set reuses the successful log
+    rather than retrying the failed one, and returns one log for the task.
+    """
+    log_dir = str(tmp_path)
+    success_eval_id = ""
+    for fail in [True, False] if failed_first else [False, True]:
+        _reset_toggled(fail)
+        log = eval(toggled_task(), model="mockllm/model", log_dir=log_dir)[0]
+        assert log.status == ("error" if fail else "success")
+        if not fail:
+            success_eval_id = log.eval.eval_id
+
+    for _ in range(2):
+        _reset_toggled(False)
+        success, logs = eval_set(
+            tasks=[toggled_task()], log_dir=log_dir, model="mockllm/model"
+        )
+        assert success
+        assert _toggled_solver_state["runs"] == 0
+        assert [log.eval.eval_id for log in logs] == [success_eval_id]
+
+    # logs of other task ids are not removed
+    assert len(list_all_eval_logs(log_dir)) == 2
+
+
+@pytest.mark.parametrize("first_run_fails", [False, True])
+def test_eval_set_shuffle_changed_log_not_returned_later(
+    tmp_path: Path, first_run_fails: bool
+) -> None:
+    """An unshuffled log superseded by a shuffled run is neither returned nor retried."""
+    log_dir = str(tmp_path)
+    kwargs: dict[str, Any] = dict(
+        log_dir=log_dir, model="mockllm/model", limit=3, retry_attempts=1
+    )
+
+    _reset_toggled(first_run_fails)
+    success, _ = eval_set(tasks=[toggled_task(samples=10)], **kwargs)
+    assert success != first_run_fails
+
+    _reset_toggled(False)
+    success, logs = eval_set(
+        tasks=[toggled_task(samples=10)], sample_shuffle=42, **kwargs
+    )
+    assert success
+    shuffled_eval_id = logs[0].eval.eval_id
+
+    _reset_toggled(False)
+    success, logs = eval_set(
+        tasks=[toggled_task(samples=10), hello_world(samples=10)],
+        sample_shuffle=42,
+        **kwargs,
+    )
+    assert success
+    assert _toggled_solver_state["runs"] == 0
+    assert len(logs) == 2
+    assert all(log.eval.config.sample_shuffle == 42 for log in logs)
+    toggled_logs = [log for log in logs if log.eval.task == "toggled_task"]
+    assert [log.eval.eval_id for log in toggled_logs] == [shuffled_eval_id]
+
+
 def test_eval_set_bundle_when_all_complete(tmp_path: Path) -> None:
     """Test that bundle is created even when all logs are already complete."""
     task1 = hello_world()

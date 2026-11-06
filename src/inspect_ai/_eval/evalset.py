@@ -163,6 +163,11 @@ class Log(NamedTuple):
     task_identifier: str
 
 
+class LatestLogs(NamedTuple):
+    complete: list[Log]
+    incomplete: list[Log]
+
+
 @dataclass
 class EvalSetArgsInTaskIdentifier:
     config: GenerateConfig
@@ -1127,7 +1132,7 @@ def eval_set(
             # look for retryable eval logs and cleave them into success/failed
             success_logs, failed_logs = list_latest_eval_logs(
                 all_tasks,
-                all_logs,
+                reusable_logs,
                 epochs=epochs,
                 limit=limit,
                 sample_id=sample_id,
@@ -1819,7 +1824,7 @@ def list_latest_eval_logs(
     incomplete_action: IncompleteAction = "retry",
     incomplete_max: int | float | None = None,
     owned_run_ids: AbstractSet[str] = frozenset(),
-) -> tuple[list[Log], list[Log]]:
+) -> LatestLogs:
     latest_logs = latest_completed_task_eval_logs(
         logs=logs, cleanup_older=cleanup_older, owned_run_ids=owned_run_ids
     )
@@ -1871,7 +1876,40 @@ def list_latest_eval_logs(
         else:
             complete_logs.append(log)
 
-    return (complete_logs, incomplete_logs)
+    return _one_log_per_task(complete_logs, incomplete_logs)
+
+
+def _one_log_per_task(
+    complete_logs: list[Log], incomplete_logs: list[Log]
+) -> LatestLogs:
+    """Keep one log per task identifier.
+
+    Separate runs of a task (an `eval()` before the eval set, or a fresh run
+    after a sample shuffle change) have different task ids, so each can
+    contribute a latest log. Use the task's newest complete log, else retry its
+    newest incomplete one. The other logs stay on disk: they were not seeded
+    from the selected log, so they may hold samples it lacks.
+    """
+
+    def by_task(logs: list[Log]) -> dict[str, list[Log]]:
+        grouped: dict[str, list[Log]] = {}
+        for log in logs:
+            grouped.setdefault(log.task_identifier, []).append(log)
+        return grouped
+
+    def newest(logs: list[Log]) -> Log:
+        return max(logs, key=lambda log: log.info.mtime or 0)
+
+    complete_by_task = by_task(complete_logs)
+    incomplete_by_task = by_task(incomplete_logs)
+    return LatestLogs(
+        complete=[newest(logs) for logs in complete_by_task.values()],
+        incomplete=[
+            newest(logs)
+            for identifier, logs in incomplete_by_task.items()
+            if identifier not in complete_by_task
+        ],
+    )
 
 
 def log_samples_complete(
@@ -1985,7 +2023,7 @@ def latest_completed_task_eval_logs(
     cleanup_older: bool = False,
     owned_run_ids: AbstractSet[str] = frozenset(),
 ) -> list[Log]:
-    """Select each task's newest log, optionally removing the older ones.
+    """Select each task id's newest log, optionally removing the older ones.
 
     Every attempt's log is seeded from the task's prior log, so an older log
     holds nothing the newest lacks; with ``cleanup_older`` the older logs are
