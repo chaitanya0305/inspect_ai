@@ -18,6 +18,7 @@ from inspect_ai._util.file import exists
 from inspect_ai.dataset import (
     Dataset,
     FieldSpec,
+    MemoryDataset,
     Sample,
     csv_dataset,
     example_dataset,
@@ -448,6 +449,34 @@ def test_dataset_shuffle_invalid_type_raises(
 
     with pytest.raises(TypeError, match="shuffle"):
         type.__call__(dataset_file, shuffle=shuffle)
+
+
+def memory_dataset_for_indexing() -> MemoryDataset:
+    return MemoryDataset([Sample(input=f"q{i}", id=i) for i in range(5)])
+
+
+@pytest.mark.parametrize(
+    "index,expected_id",
+    [(np.int64(1), 1), (np.int32(3), 3), (np.int64(-1), 4), (np.array(2), 2)],
+)
+def test_memory_dataset_numpy_integer_index(index: Any, expected_id: int) -> None:
+    sample = memory_dataset_for_indexing()[index]
+
+    assert isinstance(sample, Sample)
+    assert sample.id == expected_id
+
+
+def test_memory_dataset_slice_index() -> None:
+    dataset = memory_dataset_for_indexing()[1:3]
+
+    assert isinstance(dataset, MemoryDataset)
+    assert [sample.id for sample in dataset] == [1, 2]
+
+
+@pytest.mark.parametrize("index", [[0, 2], np.array([0, 2]), (0,), "a", 1.0])
+def test_memory_dataset_invalid_index_raises(index: Any) -> None:
+    with pytest.raises(TypeError, match="MemoryDataset indices"):
+        memory_dataset_for_indexing()[index]
 
 
 @skip_if_github_action

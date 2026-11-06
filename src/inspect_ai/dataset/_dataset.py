@@ -1,4 +1,5 @@
 import abc
+import operator
 import random
 from dataclasses import dataclass, field
 from typing import (
@@ -7,6 +8,7 @@ from typing import (
     Callable,
     Iterator,
     Sequence,
+    SupportsIndex,
     Type,
     Union,
     overload,
@@ -313,22 +315,35 @@ class MemoryDataset(Dataset):
         return self._shuffled
 
     @overload
-    def __getitem__(self, index: int) -> Sample: ...
+    def __getitem__(self, index: SupportsIndex) -> Sample: ...
 
     @overload
     def __getitem__(self, index: slice) -> Dataset: ...
 
     @override
-    def __getitem__(self, index: Union[int, slice]) -> Union[Sample, Dataset]:
-        if isinstance(index, int):
-            return self.samples[index]
-        else:
+    def __getitem__(self, index: Union[SupportsIndex, slice]) -> Union[Sample, Dataset]:
+        """Get a sample by integer index, or a dataset of samples by slice.
+
+        Integer-like indexes (e.g. numpy integers) are accepted via `__index__`.
+
+        Raises:
+            TypeError: If `index` is neither integer-like nor a slice.
+        """
+        if isinstance(index, slice):
             return MemoryDataset(
                 samples=self.samples[index],
                 name=self.name,
                 location=self.location,
                 shuffled=self.shuffled,
             )
+        try:
+            position = operator.index(index)
+        except TypeError:
+            raise TypeError(
+                "MemoryDataset indices must be integers or slices, "
+                f"not {type(index).__name__}"
+            ) from None
+        return self.samples[position]
 
     @override
     def __len__(self) -> int:
