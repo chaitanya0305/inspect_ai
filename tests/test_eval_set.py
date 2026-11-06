@@ -36,6 +36,7 @@ from inspect_ai._eval.evalset import (
     EvalSetArgsInTaskIdentifier,
     Log,
     _embed_viewer,
+    _one_log_per_task,
     _resumed_task,
     as_previous_tasks,
     epochs_changed,
@@ -2405,6 +2406,16 @@ def _reset_toggled(fail: bool) -> None:
     _toggled_solver_state["runs"] = 0
 
 
+def _manifest_task_ids(log_dir: str) -> list[str]:
+    eval_set_info = read_eval_set_info(log_dir)
+    assert eval_set_info is not None
+    return [task.task_id for task in eval_set_info.tasks]
+
+
+def _set_mtime(path: str, mtime: float) -> None:
+    os.utime(local_path(path), (mtime, mtime))
+
+
 @pytest.mark.parametrize("failed_first", [True, False])
 def test_eval_set_reuses_success_log_from_separate_eval_run(
     tmp_path: Path, failed_first: bool
@@ -2431,6 +2442,7 @@ def test_eval_set_reuses_success_log_from_separate_eval_run(
         assert success
         assert _toggled_solver_state["runs"] == 0
         assert [log.eval.eval_id for log in logs] == [success_eval_id]
+        assert _manifest_task_ids(log_dir) == [logs[0].eval.task_id]
 
     # logs of other task ids are not removed
     assert len(list_all_eval_logs(log_dir)) == 2
@@ -2469,6 +2481,75 @@ def test_eval_set_shuffle_changed_log_not_returned_later(
     assert all(log.eval.config.sample_shuffle == 42 for log in logs)
     toggled_logs = [log for log in logs if log.eval.task == "toggled_task"]
     assert [log.eval.eval_id for log in toggled_logs] == [shuffled_eval_id]
+    assert sorted(_manifest_task_ids(log_dir)) == sorted(
+        log.eval.task_id for log in logs
+    )
+
+
+def test_eval_set_retries_newer_invalidated_log_over_older_success(
+    tmp_path: Path,
+) -> None:
+    """A newer invalidated log is retried even though an older run succeeded."""
+    log_dir = str(tmp_path)
+    _reset_toggled(False)
+    older = eval(toggled_task(), model="mockllm/model", log_dir=log_dir)[0]
+    newer = eval(toggled_task(), model="mockllm/model", log_dir=log_dir)[0]
+    _set_mtime(older.location, time.time() - 60)
+    invalidated = invalidate_samples(
+        read_eval_log(newer.location),
+        "all",
+        ProvenanceData(author="test_person", reason="test_reason"),
+    )
+    write_eval_log(invalidated, newer.location)
+
+    _reset_toggled(False)
+    success, logs = eval_set(
+        tasks=[toggled_task()], log_dir=log_dir, model="mockllm/model"
+    )
+    assert success
+    assert _toggled_solver_state["runs"] == 5
+    assert [log.eval.task_id for log in logs] == [newer.eval.task_id]
+    assert not logs[0].invalidated
+    assert _manifest_task_ids(log_dir) == [newer.eval.task_id]
+
+
+def test_one_log_per_task_breaks_mtime_tie_by_creation_time(tmp_path: Path) -> None:
+    log_dir = str(tmp_path)
+    _reset_toggled(True)
+    first = eval(toggled_task(), model="mockllm/model", log_dir=log_dir)[0]
+    second = eval(toggled_task(), model="mockllm/model", log_dir=log_dir)[0]
+    by_task_id = {log.header.eval.task_id: log for log in list_all_eval_logs(log_dir)}
+    first_log, second_log = (
+        by_task_id[first.eval.task_id],
+        by_task_id[second.eval.task_id],
+    )
+    # same mtime (as on S3, with 1s resolution); only creation time differs
+    first_log = first_log._replace(
+        info=first_log.info.model_copy(update={"mtime": 1000.0}),
+        header=first_log.header.model_copy(
+            update={
+                "eval": first_log.header.eval.model_copy(
+                    update={"created": "2026-01-01T00:00:00+00:00"}
+                )
+            }
+        ),
+    )
+    second_log = second_log._replace(
+        info=second_log.info.model_copy(update={"mtime": 1000.0}),
+        header=second_log.header.model_copy(
+            update={
+                "eval": second_log.header.eval.model_copy(
+                    update={"created": "2026-01-01T00:00:01+00:00"}
+                )
+            }
+        ),
+    )
+    for incomplete in ([first_log, second_log], [second_log, first_log]):
+        latest = _one_log_per_task([], incomplete)
+        assert latest.complete == []
+        assert [log.header.eval.task_id for log in latest.incomplete] == [
+            second.eval.task_id
+        ]
 
 
 def test_eval_set_bundle_when_all_complete(tmp_path: Path) -> None:

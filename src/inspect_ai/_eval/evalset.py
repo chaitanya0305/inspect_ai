@@ -1097,14 +1097,6 @@ def eval_set(
             resolved_tasks, all_logs, log_dir_allow_dirty, eval_set_args
         )
 
-        # write eval-set info containing data about
-        # all the tasks that are a part of this eval set
-        # (include all tasks, not just tasks that need to be
-        # run in this pass)
-        write_eval_set_info(
-            eval_set_id, log_dir, resolved_tasks, all_logs, eval_set_args
-        )
-
         # see which tasks are yet to run (to complete successfully we need
         # a successful eval for every [task_file/]task_name/model combination)
         # for those that haven't run, schedule them into models => tasks groups
@@ -1122,15 +1114,11 @@ def eval_set(
         pending_tasks = [
             task[1] for task in all_tasks if task[0] not in log_task_identifiers
         ]
-        tasks_to_run: (
-            list[ResolvedTask | PreviousTask] | list[ResolvedTask] | list[PreviousTask]
-        )
         if len(pending_tasks) == len(all_tasks):
-            tasks_to_run = pending_tasks
-            success_logs: list[Log] = []
+            latest_logs = LatestLogs(complete=[], incomplete=[])
         else:
             # look for retryable eval logs and cleave them into success/failed
-            success_logs, failed_logs = list_latest_eval_logs(
+            latest_logs = list_latest_eval_logs(
                 all_tasks,
                 reusable_logs,
                 epochs=epochs,
@@ -1141,6 +1129,28 @@ def eval_set(
                 incomplete_max=incomplete_max,
                 owned_run_ids=run_ids,
             )
+
+        # write eval-set info containing data about
+        # all the tasks that are a part of this eval set
+        # (include all tasks, not just tasks that need to be
+        # run in this pass). Written from the selected logs so each
+        # task's task_id is that of the log this pass reuses or retries.
+        write_eval_set_info(
+            eval_set_id,
+            log_dir,
+            resolved_tasks,
+            [*latest_logs.complete, *latest_logs.incomplete],
+            eval_set_args,
+        )
+
+        tasks_to_run: (
+            list[ResolvedTask | PreviousTask] | list[ResolvedTask] | list[PreviousTask]
+        )
+        if len(pending_tasks) == len(all_tasks):
+            tasks_to_run = pending_tasks
+            success_logs: list[Log] = []
+        else:
+            success_logs, failed_logs = latest_logs
             if not failed_logs:
                 failed_tasks = []
             else:
@@ -1887,8 +1897,13 @@ def _one_log_per_task(
     Separate runs of a task (an `eval()` before the eval set, or a fresh run
     after a sample shuffle change) have different task ids, so each can
     contribute a latest log. Use the task's newest complete log, else retry its
-    newest incomplete one. The other logs stay on disk: they were not seeded
-    from the selected log, so they may hold samples it lacks.
+    newest incomplete one. A newest log that is invalidated is retried even when
+    an older complete log exists, since invalidating it asks for a re-run. The
+    other logs stay on disk: they were not seeded from the selected log, so they
+    may hold samples it lacks.
+
+    Newest is by file mtime, then by creation time (S3 mtimes have one-second
+    resolution).
     """
 
     def by_task(logs: list[Log]) -> dict[str, list[Log]]:
@@ -1898,18 +1913,20 @@ def _one_log_per_task(
         return grouped
 
     def newest(logs: list[Log]) -> Log:
-        return max(logs, key=lambda log: log.info.mtime or 0)
+        return max(logs, key=lambda log: (log.info.mtime or 0, log.header.eval.created))
 
     complete_by_task = by_task(complete_logs)
     incomplete_by_task = by_task(incomplete_logs)
-    return LatestLogs(
-        complete=[newest(logs) for logs in complete_by_task.values()],
-        incomplete=[
-            newest(logs)
-            for identifier, logs in incomplete_by_task.items()
-            if identifier not in complete_by_task
-        ],
-    )
+    latest = LatestLogs(complete=[], incomplete=[])
+    for identifier in {**complete_by_task, **incomplete_by_task}:
+        complete = complete_by_task.get(identifier, [])
+        incomplete = incomplete_by_task.get(identifier, [])
+        newest_log = newest(complete + incomplete)
+        if newest_log.header.invalidated or not complete:
+            latest.incomplete.append(newest(incomplete))
+        else:
+            latest.complete.append(newest(complete))
+    return latest
 
 
 def log_samples_complete(
