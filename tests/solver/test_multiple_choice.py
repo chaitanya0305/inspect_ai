@@ -632,6 +632,88 @@ async def test_answer_with_trailing_text(
     assert choices_marked_correct(new_state.choices) == expected
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "ANSWER: A/B",
+        "ANSWER: A / B",
+        "ANSWER: A & B",
+        "ANSWER: A; B",
+        "ANSWER: A + B",
+        "ANSWER: A | B",
+        "ANSWER: A/B\n\nBoth seem plausible.",
+        "ANSWER: A/B.",
+        "ANSWER: A/B\r\n",
+        # D is not a choice here, but the model still named two answers
+        "ANSWER: A & D",
+    ],
+)
+@pytest.mark.anyio
+async def test_hedged_answer_marks_no_choice(answer: str):
+    generate = generate_for_multiple_correct(answers=answer)
+    solver = multiple_choice()
+    state = simple_task_state(
+        choices=["choice 1", "choice 2", "choice 3"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+    new_state = await solver(state=state, generate=generate)
+    assert choices_marked_correct(new_state.choices) == set()
+
+    result = await choice()(new_state, Target("A"))
+    assert result is not None
+    assert result.value == INCORRECT
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("ANSWER: A/B", {"choice 1", "choice 2"}),
+        ("ANSWER: A & C", {"choice 1", "choice 3"}),
+        ("ANSWER: A; B; C", {"choice 1", "choice 2", "choice 3"}),
+        ("ANSWER: A + C", {"choice 1", "choice 3"}),
+    ],
+)
+@pytest.mark.anyio
+async def test_multiple_correct_reads_every_separated_choice(
+    answer: str, expected: set[str]
+):
+    generate = generate_for_multiple_correct(answers=answer)
+    solver = multiple_choice(multiple_correct=True)
+    state = simple_task_state(
+        choices=["choice 1", "choice 2", "choice 3"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+    new_state = await solver(state=state, generate=generate)
+    assert choices_marked_correct(new_state.choices) == expected
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # text after the separator is an explanation, not a second answer
+        "ANSWER: B; it is the capital",
+        "ANSWER: B / Paris",
+        "ANSWER: B/I think",
+        "ANSWER: B; a reasonable guess",
+        "ANSWER: B; A is a distractor",
+        "ANSWER: B / A and C are wrong",
+    ],
+)
+@pytest.mark.parametrize("multiple_correct", [False, True])
+@pytest.mark.anyio
+async def test_separator_followed_by_explanation_keeps_answer(
+    answer: str, multiple_correct: bool
+):
+    generate = generate_for_multiple_correct(answers=answer)
+    solver = multiple_choice(multiple_correct=multiple_correct)
+    state = simple_task_state(
+        choices=["choice 1", "choice 2", "choice 3"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+    new_state = await solver(state=state, generate=generate)
+    assert choices_marked_correct(new_state.choices) == {"choice 2"}
+
+
 def choices_marked_correct(choices: Choices) -> set[str]:
     """Helper function"""
     return set([choice.value for choice in choices if choice.correct])
