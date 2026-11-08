@@ -247,3 +247,21 @@ def test_exported_cache_policy_without_expiry_round_trips(
     exported = yaml.safe_load(yaml.dump(eval_log_to_run_config_dict(log)))
     params = RunConfigInput.model_validate(exported).to_params()
     assert CachePolicy.model_validate(params["cache"]).expiry is None
+
+
+def test_exported_limit_range_round_trips_through_yaml(tmp_path: Path) -> None:
+    """A `limit` range read from a log survives YAML export and run-config parsing."""
+    log = eval(
+        config_test_task,
+        model="mockllm/model",
+        limit=(0, 1),
+        log_dir=str(tmp_path / "logs"),
+    )[0]
+    log = read_eval_log(log.location, header_only=True)
+    assert log.eval.config.limit == (0, 1)
+
+    exported = yaml.safe_load(yaml.dump(eval_log_to_run_config_dict(log)))
+    assert exported["eval_config"]["limit"] == [0, 1]
+
+    params = RunConfigInput.model_validate(exported).to_params()
+    assert tuple(params["limit"]) == (0, 1)
