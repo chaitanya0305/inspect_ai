@@ -62,6 +62,12 @@ def as_tool(
 
     # get tool_info
     tool_info = agent_tool_info(agent, description, **agent_kwargs)
+    if "input" in tool_info.parameters.properties:
+        raise ValueError(
+            f"Agent {tool_info.name} has an 'input' parameter, which conflicts with "
+            + "the 'input' message argument that as_tool() adds. Rename the "
+            + "parameter, or curry it with as_tool(agent, input=...)."
+        )
 
     async def execute(input: str, *args: Any, **kwargs: Any) -> ToolResult:
         # prepare state

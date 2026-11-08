@@ -316,6 +316,84 @@ def test_agent_as_tool_converts_arguments() -> None:
     assert tool_message.text == "high 3"
 
 
+class Store:
+    """A non-JSON object curried into an agent."""
+
+    def __init__(self) -> None:
+        self.items: list[str] = []
+
+
+@agent
+def store_writer() -> Agent:
+    async def execute(
+        state: AgentState, store: Store, priority: Priority
+    ) -> AgentState:
+        """Write to a store.
+
+        Args:
+            state: Input state (conversation)
+            store: Store to write to
+            priority: How urgent the write is
+        """
+        store.items.append(priority.value)
+        state.output = ModelOutput.from_content("mockllm/model", priority.value)
+        return state
+
+    return execute
+
+
+async def test_agent_as_tool_keeps_curried_object() -> None:
+    store = Store()
+    tool = as_tool(store_writer(), store=store)
+    call = ToolCall(
+        id="1",
+        function="store_writer",
+        arguments={"input": "write", "priority": "low"},
+    )
+    result = await execute_tools(
+        [ChatMessageAssistant(content="", tool_calls=[call])], [tool]
+    )
+
+    tool_message = result.messages[-1]
+    assert isinstance(tool_message, ChatMessageTool)
+    assert tool_message.error is None
+    assert tool_message.text == "low"
+    assert store.items == ["low"]
+
+
+@agent
+def agent_with_input_param() -> Agent:
+    async def execute(state: AgentState, input: str = "default") -> AgentState:
+        """Agent with its own input parameter.
+
+        Args:
+            state: Input state (conversation)
+            input: An input that clashes with the as_tool() input
+        """
+        state.output = ModelOutput.from_content("mockllm/model", input)
+        return state
+
+    return execute
+
+
+def test_agent_as_tool_input_param_conflict() -> None:
+    with pytest.raises(ValueError, match="has an 'input' parameter"):
+        as_tool(agent_with_input_param())
+
+
+async def test_agent_as_tool_curried_input_param() -> None:
+    tool = as_tool(agent_with_input_param(), input="curried")
+    call = ToolCall(id="1", function="agent_with_input_param", arguments={"input": "x"})
+    result = await execute_tools(
+        [ChatMessageAssistant(content="", tool_calls=[call])], [tool]
+    )
+
+    tool_message = result.messages[-1]
+    assert isinstance(tool_message, ChatMessageTool)
+    assert tool_message.error is None
+    assert tool_message.text == "curried"
+
+
 def test_agent_handoff():
     check_agent_as_tool(handoff, tool_name="transfer_to_web_surfer", input_param=None)
 
