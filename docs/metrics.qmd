@@ -242,7 +242,7 @@ def judge_reliability():
     )
 ```
 
-Each sample's `Score.value` is now `[judge1_rating, judge2_rating, judge3_rating]`, which `krippendorff_alpha()` aggregates across samples to compute α. Pick `level="nominal"` for unordered category labels, `level="ordinal"` for Likert-style ratings, or `level="interval"` for continuous scores; see the metric's docstring for details.
+Each sample's `Score.value` is now `[judge1_rating, judge2_rating, judge3_rating]`, which `krippendorff_alpha()` aggregates across samples to compute α. The metric receives unreduced scores, so with multiple epochs each epoch's ratings count as a separate unit. Pick `level="nominal"` for unordered category labels, `level="ordinal"` for Likert-style ratings, or `level="interval"` for continuous scores; see the metric's docstring for details.
 
 ## Custom Metrics
 

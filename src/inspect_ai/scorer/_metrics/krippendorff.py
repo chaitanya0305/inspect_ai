@@ -18,7 +18,7 @@ Disagreement = Callable[[list[object]], float]
 """Sum of δ²(a, b) over every ordered pair in a list of ratings."""
 
 
-@metric
+@metric(scores="unreduced")
 def krippendorff_alpha(
     level: KrippendorffLevel = "nominal",
     to_float: ValueToFloat | None = None,
@@ -32,6 +32,11 @@ def krippendorff_alpha(
     `multi_scorer()` with the `collect` reducer. Samples whose
     `Score.value` is not a sequence (or contains fewer than two ratings)
     are skipped.
+
+    The metric receives unreduced scores, so with epochs each epoch's ratings
+    are a separate unit. An epoch reducer would otherwise convert the ratings
+    to floats (making distinct labels equal) and fail when a judge that did
+    not score leaves one epoch's list shorter than another's.
 
     α = 1 indicates perfect agreement; α = 0 indicates agreement equal
     to chance; α < 0 indicates systematic disagreement.

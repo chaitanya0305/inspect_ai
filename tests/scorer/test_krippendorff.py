@@ -3,8 +3,19 @@ from unittest.mock import patch
 
 import pytest
 
-from inspect_ai.scorer import Score, krippendorff_alpha, value_to_float
+from inspect_ai import Task, eval
+from inspect_ai.dataset import Sample
+from inspect_ai.scorer import (
+    Score,
+    Scorer,
+    Target,
+    krippendorff_alpha,
+    multi_scorer,
+    scorer,
+    value_to_float,
+)
 from inspect_ai.scorer._metric import SampleScore
+from inspect_ai.solver import TaskState
 
 
 def _nominal_warning_emitted(mock_logger) -> bool:
@@ -185,3 +196,63 @@ def test_krippendorff_nominal_on_strings_does_not_warn():
 def test_krippendorff_invalid_level_raises():
     with pytest.raises(ValueError, match="unsupported level"):
         krippendorff_alpha(level="ratio")
+
+
+# ---------------------------------------------------------------------------
+# multi_scorer(reducer="collect") panel in an eval
+# ---------------------------------------------------------------------------
+
+_PANEL_LABELS = {
+    1: ["safe", "safe", "safe"],
+    2: ["unsafe", "unsafe", "unsafe"],
+    3: ["safe", "unsafe", "safe"],
+    4: ["unsafe", "unsafe", "unsafe"],
+}
+
+
+@scorer(metrics=[])
+def _panel_judge(index: int, fail_sample: int | None = None) -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        if state.sample_id == fail_sample and state.epoch == 2:
+            return Score.unscored(reason="scoring_failed")
+        return Score(value=_PANEL_LABELS[int(state.sample_id)][index])
+
+    return score
+
+
+@scorer(metrics=[krippendorff_alpha()])
+def _panel(fail_sample: int | None = None) -> Scorer:
+    return multi_scorer(
+        [_panel_judge(0), _panel_judge(1), _panel_judge(2, fail_sample)], "collect"
+    )
+
+
+def _panel_task(fail_sample: int | None = None) -> Task:
+    return Task(
+        dataset=[Sample(input="q", target="t", id=id) for id in _PANEL_LABELS],
+        scorer=_panel(fail_sample),
+    )
+
+
+def test_krippendorff_panel_keeps_string_labels():
+    log = eval(_panel_task(), model="mockllm/model", display="none")[0]
+    assert log.status == "success"
+    assert log.results is not None
+    expected = krippendorff_alpha()(_sample_scores(_PANEL_LABELS.values()))
+    actual = log.results.scores[0].metrics["krippendorff_alpha"].value
+    assert actual == pytest.approx(expected)
+    assert actual != 1.0
+
+
+def test_krippendorff_panel_with_epochs_and_unscored_judge():
+    log = eval(
+        _panel_task(fail_sample=1), epochs=2, model="mockllm/model", display="none"
+    )[0]
+    assert log.status == "success", log.error
+    assert log.results is not None
+    # each epoch is a unit; sample 1's second epoch has two ratings
+    epoch_2 = [_PANEL_LABELS[1][:2], *list(_PANEL_LABELS.values())[1:]]
+    units = [*_PANEL_LABELS.values(), *epoch_2]
+    expected = krippendorff_alpha()(_sample_scores(units))
+    actual = log.results.scores[0].metrics["krippendorff_alpha"].value
+    assert actual == pytest.approx(expected)
