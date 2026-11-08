@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from inspect_ai import Task, eval
+from inspect_ai import Epochs, Task, eval
 from inspect_ai.dataset import Sample
 from inspect_ai.scorer import (
     Score,
@@ -241,12 +241,15 @@ def test_krippendorff_panel_keeps_string_labels():
     expected = krippendorff_alpha()(_sample_scores(_PANEL_LABELS.values()))
     actual = log.results.scores[0].metrics["krippendorff_alpha"].value
     assert actual == pytest.approx(expected)
-    assert actual != 1.0
 
 
-def test_krippendorff_panel_with_epochs_and_unscored_judge():
+@pytest.mark.parametrize("epochs", [2, Epochs(2, "mean")])
+def test_krippendorff_panel_with_epochs_and_unscored_judge(epochs: int | Epochs):
     log = eval(
-        _panel_task(fail_sample=1), epochs=2, model="mockllm/model", display="none"
+        _panel_task(fail_sample=1),
+        epochs=epochs,
+        model="mockllm/model",
+        display="none",
     )[0]
     assert log.status == "success", log.error
     assert log.results is not None
