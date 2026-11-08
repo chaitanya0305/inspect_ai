@@ -90,8 +90,7 @@ def eval_log_to_run_config_dict(log: EvalLog) -> dict[str, Any]:
         out["solver"] = solver_entry
 
     # Eval config — drop operational fields (logging, display, parallelism).
-    # JSON mode so a `limit` range exports as a list, which `yaml.safe_load`
-    # can read back (a tuple dumps as a `!!python/tuple` tag).
+    # JSON mode: a `limit` range must export as a list, not a `!!python/tuple`.
     ec = {
         k: v
         for k, v in spec.config.model_dump(mode="json", exclude_none=True).items()

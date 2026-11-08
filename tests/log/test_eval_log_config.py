@@ -254,14 +254,14 @@ def test_exported_limit_range_round_trips_through_yaml(tmp_path: Path) -> None:
     log = eval(
         config_test_task,
         model="mockllm/model",
-        limit=(0, 1),
+        limit=(1, 3),
         log_dir=str(tmp_path / "logs"),
     )[0]
     log = read_eval_log(log.location, header_only=True)
-    assert log.eval.config.limit == (0, 1)
+    assert log.eval.config.limit == (1, 3)
 
     exported = yaml.safe_load(yaml.dump(eval_log_to_run_config_dict(log)))
-    assert exported["eval_config"]["limit"] == [0, 1]
+    assert exported["eval_config"]["limit"] == [1, 3]
 
     params = RunConfigInput.model_validate(exported).to_params()
-    assert tuple(params["limit"]) == (0, 1)
+    assert tuple(params["limit"]) == (1, 3)
