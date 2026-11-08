@@ -1935,3 +1935,16 @@ async def test_eval_scoring_hook_cancellation_closes_sample_streams(
     finally:
         for receive in receivers:
             receive.close()
+
+
+def test_auto_id_skips_ids_already_in_dataset() -> None:
+    # The second sample's position-based id (2) is already used by the third.
+    dataset = [
+        Sample(input="a", target="a", id=1),
+        Sample(input="b", target="b"),
+        Sample(input="c", target="c", id=2),
+    ]
+    log = eval(Task(dataset=dataset), model="mockllm/model", display="none")[0]
+    assert log.status == "success"
+    assert log.samples is not None
+    assert sorted(sample.id for sample in log.samples) == [1, 2, 3]
