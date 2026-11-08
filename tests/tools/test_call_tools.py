@@ -13,7 +13,11 @@ from inspect_ai._util.content import ContentDocument, ContentText
 from inspect_ai._util.exception import TerminateSampleError
 from inspect_ai.event._tool import ToolEvent
 from inspect_ai.log._transcript import Transcript, init_transcript
-from inspect_ai.model._call_tools import MAX_TOOL_CALL_ARGUMENTS_DEPTH, execute_tools
+from inspect_ai.model._call_tools import (
+    MAX_TOOL_CALL_ARGUMENTS_DEPTH,
+    execute_tools,
+    tool_param,
+)
 from inspect_ai.model._chat_message import (
     ChatMessageAssistant,
     ChatMessageTool,
@@ -27,7 +31,7 @@ from inspect_ai.tool import (
     tool,
     update_plan,
 )
-from inspect_ai.tool._tool import tool_result_content
+from inspect_ai.tool._tool import ToolParsingError, tool_result_content
 from inspect_ai.tool._tool_call import ToolCall, ToolCallError
 from inspect_ai.tool._tool_def import ToolDef
 from inspect_ai.util._limit import LimitExceededError
@@ -603,6 +607,79 @@ async def test_union_params_converted(args, expected):
     assert isinstance(messages[-1], ChatMessageTool)
     assert messages[-1].error is None, f"unexpected tool error: {messages[-1].error}"
     assert messages[-1].content == repr(expected)
+
+
+@dataclass
+class ScrollAction:
+    kind: Literal["scroll"]
+    dy: int
+
+
+class PointModel(BaseModel):
+    x: int
+
+
+class Opaque:
+    pass
+
+
+@dataclass
+class OpaqueHolder:
+    item: Opaque
+
+
+@pytest.mark.parametrize(
+    "type_hint,value,expected",
+    [
+        (
+            ClickAction | TypeAction | ScrollAction,
+            {"kind": "scroll", "dy": 2},
+            ScrollAction(kind="scroll", dy=2),
+        ),
+        (None | ClickAction, {"kind": "click", "x": 1}, ClickAction(kind="click", x=1)),
+        (Optional[TypeAction], None, None),
+        (int | str, "5", "5"),
+        (PointModel | dict[str, Any], {"x": 1, "y": 2}, {"x": 1, "y": 2}),
+        (dict[str, Any] | PointModel, {"x": 1, "y": 2}, {"x": 1, "y": 2}),
+        (list[PointModel] | PointModel, {"x": 1}, {"x": 1}),
+        # pydantic can't build a validator for this union, so it passes through
+        (OpaqueHolder | PointModel, {"x": 1}, {"x": 1}),
+    ],
+)
+def test_union_tool_param(type_hint, value, expected):
+    result = tool_param(type_hint, value)
+    assert result == expected
+    assert type(result) is type(expected)
+
+
+def test_model_union_tool_param_rejects_unmatched_value():
+    with pytest.raises(ToolParsingError, match="ClickAction | TypeAction"):
+        tool_param(ClickAction | TypeAction, {"kind": "drag", "x": 1})
+
+
+@tool
+def model_or_dict_tool():
+    async def model_or_dict_tool(value: PointModel | dict[str, Any]) -> str:
+        """Echo a value.
+
+        Args:
+            value: A point or any mapping.
+        """
+        return repr(value)
+
+    return model_or_dict_tool
+
+
+async def test_model_or_dict_union_passes_dict_through():
+    call = make_call("model_or_dict_tool", {"value": {"x": 1, "y": 2}})
+    messages, _ = await execute_tools(
+        [ChatMessageAssistant(content=[], tool_calls=[call])],
+        [ToolDef(model_or_dict_tool())],
+    )
+
+    assert isinstance(messages[-1], ChatMessageTool)
+    assert messages[-1].error is None, f"unexpected tool error: {messages[-1].error}"
+    assert messages[-1].content == repr({"x": 1, "y": 2})
 
 
 @tool

@@ -10,6 +10,7 @@ from copy import copy, deepcopy
 from dataclasses import dataclass, is_dataclass, replace
 from datetime import date, datetime, time, timezone
 from enum import EnumMeta
+from functools import lru_cache
 from logging import getLogger
 from textwrap import dedent
 from types import UnionType
@@ -42,7 +43,12 @@ if TYPE_CHECKING:
 import anyio
 import yaml
 from anyio.streams.memory import MemoryObjectSendStream
-from pydantic import BaseModel, TypeAdapter
+from pydantic import (
+    BaseModel,
+    PydanticSchemaGenerationError,
+    TypeAdapter,
+    ValidationError,
+)
 from typing_extensions import is_typeddict
 
 from inspect_ai._sentinel._context import SentinelFailure, checks_tool_calls
@@ -1865,27 +1871,49 @@ def tool_param(type_hint: Type[Any], input: Any) -> Any:
     elif origin is Union or origin is types.UnionType:
         if input is None:
             return None
-        members = [arg for arg in args if arg is not type(None)]
+        members = tuple(arg for arg in args if arg is not type(None))
         if len(members) == 1:
             return tool_param(members[0], input)
-        return _union_param(members, input)
+        if all(_is_model_type(member) for member in members):
+            return _model_union_param(members, input)
+        return input
     else:
         return input
 
 
-def _union_param(members: list[Any], input: Any) -> Any:
-    """Convert a value for a union of several (non-None) types.
+def _is_model_type(type_hint: Any) -> bool:
+    return (
+        get_origin(type_hint) is None
+        and isinstance(type_hint, type)
+        and (is_dataclass(type_hint) or issubclass(type_hint, BaseModel))
+    )
 
-    Pydantic's smart union mode picks the member that fits the value best
-    (an exact type match wins, so `int | str` keeps "5" a string). Unions
-    pydantic cannot build a validator for are passed through unchanged.
+
+def _model_union_param(members: tuple[type, ...], input: Any) -> Any:
+    """Convert a value for a union whose members are all models or dataclasses.
+
+    Pydantic's smart union mode picks the member that fits the value best.
+    Other unions are passed through unchanged, since picking a member for
+    e.g. `Model | dict` or `int | str` could change or drop the model's value.
     """
-    union_type: Any = Union[tuple(members)]
-    try:
-        adapter: TypeAdapter[Any] = TypeAdapter(union_type)
-    except Exception:
+    adapter = _union_adapter(members)
+    if adapter is None:
         return input
-    return adapter.validate_python(input)
+    try:
+        return adapter.validate_python(input)
+    except ValidationError as ex:
+        names = " | ".join(member.__name__ for member in members)
+        raise ToolParsingError(f"Unable to convert '{input}' to {names}: {ex}") from ex
+
+
+@lru_cache(maxsize=None)
+def _union_adapter(members: tuple[type, ...]) -> TypeAdapter[Any] | None:
+    try:
+        union_type: Any = Union[members]
+        return TypeAdapter(union_type)
+    except PydanticSchemaGenerationError:
+        # a dataclass with a field type pydantic can't validate
+        return None
 
 
 class MappedToolCallError(NamedTuple):
