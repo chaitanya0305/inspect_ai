@@ -547,6 +547,64 @@ async def test_mixed_tool_result_preserved_as_structured_content():
     ]
 
 
+class ClickAction(BaseModel):
+    kind: Literal["click"]
+    x: int
+
+
+class TypeAction(BaseModel):
+    kind: Literal["type"]
+    text: str
+
+
+@tool
+def union_tool():
+    async def union_tool(
+        action: ClickAction | TypeAction,
+        later: None | MyPydanticModel = None,
+        either: int | str = 0,
+    ) -> str:
+        """Run an action.
+
+        Args:
+            action: The action to run.
+            later: An optional model, with None listed first.
+            either: A value that can be int or str.
+        """
+        return repr((action, later, either))
+
+    return union_tool
+
+
+@pytest.mark.parametrize(
+    "args,expected",
+    [
+        (
+            {"action": {"kind": "type", "text": "hi"}},
+            (TypeAction(kind="type", text="hi"), None, 0),
+        ),
+        (
+            {"action": {"kind": "click", "x": 3}, "later": {"name": "n", "id": 1}},
+            (ClickAction(kind="click", x=3), MyPydanticModel(name="n", id=1), 0),
+        ),
+        (
+            {"action": {"kind": "click", "x": 3}, "either": "5"},
+            (ClickAction(kind="click", x=3), None, "5"),
+        ),
+    ],
+)
+async def test_union_params_converted(args, expected):
+    tool_def = ToolDef(union_tool())
+    call = make_call("union_tool", args)
+    messages, _ = await execute_tools(
+        [ChatMessageAssistant(content=[], tool_calls=[call])], [tool_def]
+    )
+
+    assert isinstance(messages[-1], ChatMessageTool)
+    assert messages[-1].error is None, f"unexpected tool error: {messages[-1].error}"
+    assert messages[-1].content == repr(expected)
+
+
 @tool
 def search_with_default_none():
     async def search(query: str, filters: dict = None) -> str:  # type: ignore[assignment]

@@ -1863,12 +1863,29 @@ def tool_param(type_hint: Type[Any], input: Any) -> Any:
         else:
             return input
     elif origin is Union or origin is types.UnionType:
-        if args[1] is type(None) and input is not None:
-            return tool_param(args[0], input)
-        else:
-            return input
+        if input is None:
+            return None
+        members = [arg for arg in args if arg is not type(None)]
+        if len(members) == 1:
+            return tool_param(members[0], input)
+        return _union_param(members, input)
     else:
         return input
+
+
+def _union_param(members: list[Any], input: Any) -> Any:
+    """Convert a value for a union of several (non-None) types.
+
+    Pydantic's smart union mode picks the member that fits the value best
+    (an exact type match wins, so `int | str` keeps "5" a string). Unions
+    pydantic cannot build a validator for are passed through unchanged.
+    """
+    union_type: Any = Union[tuple(members)]
+    try:
+        adapter: TypeAdapter[Any] = TypeAdapter(union_type)
+    except Exception:
+        return input
+    return adapter.validate_python(input)
 
 
 class MappedToolCallError(NamedTuple):
