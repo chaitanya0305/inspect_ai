@@ -1,5 +1,6 @@
+import inspect
 import re
-from typing import Any
+from typing import Any, Callable, get_type_hints
 
 from shortuuid import uuid as shortuuid
 
@@ -89,6 +90,8 @@ def as_tool(
         else:
             return ""
 
+    _set_execute_signature(execute, agent, agent_kwargs)
+
     # add "input" param
     tool_info.parameters.properties = {
         "input": ToolParam(type="string", description="Input message.")
@@ -107,6 +110,39 @@ def as_tool(
         max_output=max_output,
     )
     return tool_def.as_tool()
+
+
+def _set_execute_signature(
+    execute: Callable[..., Any], agent: Agent, agent_kwargs: dict[str, Any]
+) -> None:
+    """Give `execute` the agent's parameters (less `state` and curried ones).
+
+    Tool call arguments are converted to parameter types (enums, models,
+    dataclasses, dates) using the tool function's signature, so without this
+    the agent would receive the raw JSON values passed to `execute`'s
+    `**kwargs`.
+    """
+    if inspect.isfunction(agent) or inspect.ismethod(agent):
+        type_hints = get_type_hints(agent)
+    else:
+        type_hints = get_type_hints(type(agent).__call__)
+
+    params = [inspect.Parameter("input", inspect.Parameter.KEYWORD_ONLY)]
+    annotations: dict[str, Any] = {"input": str}
+    for name, param in inspect.signature(agent).parameters.items():
+        if name == "state" or name in agent_kwargs:
+            continue
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            continue
+        if param.kind != inspect.Parameter.VAR_KEYWORD:
+            param = param.replace(kind=inspect.Parameter.KEYWORD_ONLY)
+        params.append(param.replace(annotation=inspect.Parameter.empty))
+        if name in type_hints:
+            annotations[name] = type_hints[name]
+
+    setattr(execute, "__signature__", inspect.Signature(params))
+    execute.__annotations__ = annotations
+    execute.__doc__ = inspect.getdoc(agent)
 
 
 def agent_tool_info(

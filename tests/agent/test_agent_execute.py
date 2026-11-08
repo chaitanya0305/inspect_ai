@@ -1,6 +1,8 @@
+from enum import Enum
 from typing import Callable, TypeAlias
 
 import pytest
+from pydantic import BaseModel
 from test_helpers.limits import check_limit_event
 
 from inspect_ai import eval
@@ -256,6 +258,62 @@ def test_agent_as_tool_respects_sample_limits() -> None:
     assert tool_message.error is not None
     assert tool_message.error.message == "The tool exceeded its message limit of 10."
     check_limit_event(log, "message")
+
+
+class Priority(Enum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class ResultFilter(BaseModel):
+    max_results: int
+
+
+@agent
+def typed_researcher() -> Agent:
+    async def execute(
+        state: AgentState, priority: Priority, filter: ResultFilter
+    ) -> AgentState:
+        """Research a topic.
+
+        Args:
+            state: Input state (conversation)
+            priority: How urgent the research is
+            filter: Result filter
+        """
+        assert isinstance(priority, Priority)
+        assert isinstance(filter, ResultFilter)
+        state.output = ModelOutput.from_content(
+            "mockllm/model", f"{priority.value} {filter.max_results}"
+        )
+        return state
+
+    return execute
+
+
+def test_agent_as_tool_converts_arguments() -> None:
+    log = eval(
+        Task(
+            solver=[
+                use_tools(as_tool(typed_researcher())),
+                call_looping_agent(
+                    function_name="typed_researcher",
+                    arguments={
+                        "input": "topic",
+                        "priority": "high",
+                        "filter": {"max_results": 3},
+                    },
+                ),
+            ]
+        )
+    )[0]
+
+    assert log.status == "success"
+    assert log.samples
+    tool_message = log.samples[0].messages[-1]
+    assert isinstance(tool_message, ChatMessageTool)
+    assert tool_message.error is None
+    assert tool_message.text == "high 3"
 
 
 def test_agent_handoff():
