@@ -954,7 +954,7 @@ class TaskLogger:
         a parameter change to a possibly-remote write.)
 
         ``log_shared`` cannot turn shared sync on at runtime: a buffer started
-        without it has no filestore (a normal CLI run passes ``log_shared=0``),
+        without it has no filestore (``log_shared`` unset or ``0``),
         so the request is rejected and reported back as ``log_shared=None``
         ("off") rather than echoing a value that won't take effect. It's also a
         no-op when realtime logging — and thus the buffer database — is off.
