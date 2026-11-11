@@ -57,7 +57,9 @@ _MATH_WORKERS = 1
 _BOX_START = re.compile(
     r"(?:\\(?:beginboxed|boxed|fbox)|(?<![A-Za-z\\])(?:boxed|fbox|oxed))\s*\{"
 )
-_ANSWER_MARKER = re.compile(r"(?i)(?:final\s+answer|answer|result)\s*(?:is\b|[:=])\s*")
+_ANSWER_MARKER = re.compile(
+    r"(?i)(?:final\s+answer|answer|result)\s*(?:is\b\s*[:=]?|[:=])\s*"
+)
 _NUMBER = re.compile(
     r"[-+]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
     r"(?:[eE][-+]?\d+)?\s*%?"
@@ -315,6 +317,19 @@ def _strip_delimiters(text: str) -> str:
     return text.rstrip(" \t\r\n.,;:")
 
 
+_MARKER_EMPHASIS_EDGES = re.compile(r"\A[\s*_]+|[\s*_]+\Z")
+
+
+def _strip_marker_emphasis(text: str) -> str:
+    """Strip markdown emphasis left at the edges of an answer-marker suffix.
+
+    The marker can sit inside the emphasis (``**Answer: 42**``) or the
+    emphasis can close after it (``**Answer:** 42``), so the suffix carries
+    only one side of the pair, which `_strip_delimiters` leaves in place.
+    """
+    return _MARKER_EMPHASIS_EDGES.sub("", text)
+
+
 def _append_candidate(candidates: list[str], candidate: str | None) -> None:
     if candidate is None:
         return
@@ -338,7 +353,10 @@ def _answer_candidates(text: str) -> list[str]:
         last_marker = match
     if last_marker is not None:
         suffix = text[last_marker.end() :]
-        _append_candidate(candidates, suffix.splitlines()[0] if suffix else None)
+        _append_candidate(
+            candidates,
+            _strip_marker_emphasis(suffix.splitlines()[0]) if suffix else None,
+        )
 
     if _is_short_composite_answer(text):
         _append_candidate(candidates, text)
