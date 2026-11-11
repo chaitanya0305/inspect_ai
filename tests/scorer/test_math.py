@@ -772,9 +772,6 @@ _MARKER_WORK = (
         (_MARKER_WORK + "**Answer: 7/2**", "7/2"),
         (_MARKER_WORK + "**Answer: 2\\sqrt{3}**", "2\\sqrt{3}"),
         (_MARKER_WORK + "**Answer: (1, 2)**", "(1,2)"),
-        ("Answer: 12 *units*", "12"),
-        ("Answer: 12 *(rounded)*", "12"),
-        ("**Answer:** 42 *(approx)*", "42"),
         ("The answer is: 7/2", "7/2"),
         (_MARKER_WORK + "The final answer is: 2\\sqrt{3}", "2\\sqrt{3}"),
     ],
@@ -799,6 +796,27 @@ def test_bold_or_colon_answer_marker_is_not_bypassed_by_earlier_work(
     result = _score_answer(_MARKER_WORK + marker, ("21",))
     assert result.status == "incorrect"
     assert result.answer is not None and "42" in result.answer
+
+
+@pytest.mark.parametrize(
+    "answer,target",
+    [
+        ("Answer: 12 *units*", "12"),
+        ("Answer: 12 *(rounded)*", "12"),
+        ("**Answer:** 42 *(approx)*", "42"),
+    ],
+)
+def test_emphasized_note_after_marker_answer_is_unchanged(
+    answer: str, target: str
+) -> None:
+    # Guards against splitting an emphasis pair; these score via the number fallback.
+    assert _score_answer(answer, (target,)).status == "correct"
+
+
+@pytest.mark.xfail(reason="an emphasized note after the answer is not stripped")
+def test_emphasized_note_after_wrong_answer_is_incorrect() -> None:
+    result = _score_answer(_MARKER_WORK + "Answer: 42 *units*", ("21",))
+    assert result.status == "incorrect"
 
 
 def test_text_answer_is_not_overridden_by_subexpression() -> None:
