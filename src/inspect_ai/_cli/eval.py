@@ -745,7 +745,7 @@ def eval_options(func: Callable[..., Any]) -> Callable[..., click.Context]:
         is_flag=False,
         flag_value="true",
         default=None,
-        callback=int_or_bool_flag_callback(DEFAULT_LOG_SHARED),
+        callback=int_or_bool_flag_callback(DEFAULT_LOG_SHARED, unset_none=True),
         help=LOG_SHARED_HELP,
         envvar=["INSPECT_LOG_SHARED", "INSPECT_EVAL_LOG_SHARED"],
     )
@@ -2565,7 +2565,7 @@ def parse_comma_separated(value: str | None) -> list[str] | None:
     is_flag=False,
     flag_value="true",
     default=None,
-    callback=int_or_bool_flag_callback(DEFAULT_LOG_SHARED),
+    callback=int_or_bool_flag_callback(DEFAULT_LOG_SHARED, unset_none=True),
     help=LOG_SHARED_HELP,
     envvar=["INSPECT_LOG_SHARED", "INSPECT_EVAL_LOG_SHARED"],
 )

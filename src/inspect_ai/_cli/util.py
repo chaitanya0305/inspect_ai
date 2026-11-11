@@ -13,13 +13,17 @@ from inspect_ai.util._sandbox.environment import SandboxEnvironmentSpec
 
 
 def int_or_bool_flag_callback(
-    true_value: int, false_value: int = 0, is_one_true: bool = True
-) -> Callable[[click.Context, click.Parameter, Any], int]:
-    def callback(ctx: click.Context, param: click.Parameter, value: Any) -> int:
+    true_value: int,
+    false_value: int = 0,
+    is_one_true: bool = True,
+    unset_none: bool = False,
+) -> Callable[[click.Context, click.Parameter, Any], int | None]:
+    def callback(ctx: click.Context, param: click.Parameter, value: Any) -> int | None:
         """Callback to parse the an option that can either be a boolean flag or integer.
 
         Desired behavior:
-        - Not specified at all -> false_value
+        - Not specified at all -> false_value (None when `unset_none`, so that
+          a value from a run config or a retried log still applies)
         - Specified with no value -> true_value
         - Specified with "true"/"false" -> true_value or false_value respectively
         - Specified with an integer -> that integer
@@ -31,7 +35,7 @@ def int_or_bool_flag_callback(
         source = ctx.get_parameter_source(param.name) if param.name else ""
         if source == click.core.ParameterSource.DEFAULT:
             # Means the user did NOT specify the flag at all
-            return false_value
+            return None if unset_none else false_value
 
         try:
             return int_or_bool_value(value, true_value, false_value, is_one_true)

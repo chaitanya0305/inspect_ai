@@ -779,6 +779,78 @@ def test_eval_retry_cli_preserves_error_flags_from_log():
             assert log.eval.config.continue_on_fail is True
 
 
+LOG_SHARED_UNSET_ENV: dict[str, str | None] = {
+    "INSPECT_LOG_SHARED": None,
+    "INSPECT_EVAL_LOG_SHARED": None,
+}
+
+
+def test_eval_run_config_log_shared_not_clobbered():
+    """An absent --log-shared must not overwrite log_shared from --run-config."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        log_dir = temp_path / "logs"
+        run_config = temp_path / "run.yaml"
+        run_config.write_text(
+            """
+task: tests/test_eval_config.py@eval_config_task
+model: mockllm/model
+eval_config:
+  log_shared: 7
+  limit: 1
+""".strip()
+        )
+
+        result = run_eval_cli(
+            ["--run-config", run_config.as_posix(), "--log-dir", log_dir.as_posix()],
+            env=LOG_SHARED_UNSET_ENV,
+        )
+        assert_cli_success(result)
+        log = read_eval_log(list_eval_logs(log_dir.as_posix())[0])
+        assert log.eval.config.log_shared == 7
+
+
+def test_eval_retry_cli_preserves_log_shared_from_log():
+    """`inspect eval-retry` without --log-shared keeps the log's log_shared."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        log_dir = Path(temp_dir) / "logs"
+        result = run_eval_cli(
+            [
+                "tests/test_eval_config.py@eval_config_failing_error_flags_task",
+                "--model",
+                "mockllm/model",
+                "--log-dir",
+                log_dir.as_posix(),
+                "--log-shared",
+                "7",
+            ],
+            env=LOG_SHARED_UNSET_ENV,
+        )
+        assert_cli_success(result)
+        first = read_eval_log(list_eval_logs(log_dir.as_posix())[0])
+        assert first.status == "error"
+        assert first.eval.config.log_shared == 7
+
+        retry = run_eval_retry_cli(
+            [first.location, "--log-dir", log_dir.as_posix()],
+            env=LOG_SHARED_UNSET_ENV,
+        )
+        assert_cli_success(retry)
+        logs = [read_eval_log(f) for f in list_eval_logs(log_dir.as_posix())]
+        assert len(logs) == 2
+        for log in logs:
+            assert log.eval.config.log_shared == 7
+
+        # an explicit --log-shared false on retry still turns it off
+        retry = run_eval_retry_cli(
+            [first.location, "--log-dir", log_dir.as_posix(), "--log-shared", "false"],
+            env=LOG_SHARED_UNSET_ENV,
+        )
+        assert_cli_success(retry)
+        newest = read_eval_log(list_eval_logs(log_dir.as_posix())[0])
+        assert not newest.eval.config.log_shared
+
+
 @solver
 def eval_config_solver(shape="square"):
     async def solve(state, generate):
