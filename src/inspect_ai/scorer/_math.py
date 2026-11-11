@@ -317,17 +317,31 @@ def _strip_delimiters(text: str) -> str:
     return text.rstrip(" \t\r\n.,;:")
 
 
-_MARKER_EMPHASIS_EDGES = re.compile(r"\A[\s*_]+|[\s*_]+\Z")
+# A run of emphasis marks at either end; a trailing run after "\" or "^" is
+# part of the answer ("5\*", "A^*").
+_LEADING_EMPHASIS = re.compile(r"\A[*_]+")
+_TRAILING_EMPHASIS = re.compile(r"(?<![\\^])[*_]+\Z")
 
 
 def _strip_marker_emphasis(text: str) -> str:
-    """Strip markdown emphasis left at the edges of an answer-marker suffix.
+    """Strip unmatched markdown emphasis at the edges of an answer-marker suffix.
 
     The marker can sit inside the emphasis (``**Answer: 42**``) or the
     emphasis can close after it (``**Answer:** 42``), so the suffix carries
     only one side of the pair, which `_strip_delimiters` leaves in place.
+    A run is dropped only if the suffix has no matching run on the other
+    side, so a pair inside the answer (``12 *units*``, ``**42**``) is kept.
+    Sentence punctuation after the emphasis (``**Answer: 42**.``) is
+    removed first so it does not hide the closing run.
     """
-    return _MARKER_EMPHASIS_EDGES.sub("", text)
+    text = text.strip().rstrip(" \t.,;:")
+    trailing = _TRAILING_EMPHASIS.search(text)
+    if trailing is not None and trailing.group(0) not in text[: trailing.start()]:
+        text = text[: trailing.start()].rstrip(" \t.,;:")
+    leading = _LEADING_EMPHASIS.match(text)
+    if leading is not None and leading.group(0) not in text[leading.end() :]:
+        text = text[leading.end() :].lstrip()
+    return text
 
 
 def _append_candidate(candidates: list[str], candidate: str | None) -> None:

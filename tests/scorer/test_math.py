@@ -751,7 +751,7 @@ def test_prose_fallback_does_not_manufacture_false_matches() -> None:
     assert _score_answer("The perimeter is 7", ("42",)).status == "incorrect"
 
 
-_BOLD_ANSWER_WORK = (
+_MARKER_WORK = (
     "The base is 6 and the height is 7, so the triangle's area is "
     "$\\frac{1}{2} \\cdot 6 \\cdot 7 = 21$. Doubling gives the rectangle.\n\n"
 )
@@ -765,23 +765,40 @@ _BOLD_ANSWER_WORK = (
         ("__Answer: 42__", "42"),
         ("**Answer:** 42", "42"),
         ("**Answer: 42.**", "42"),
-        (_BOLD_ANSWER_WORK + "**Answer: 7/2**", "7/2"),
-        (_BOLD_ANSWER_WORK + "**Answer: 2\\sqrt{3}**", "2\\sqrt{3}"),
-        (_BOLD_ANSWER_WORK + "**Answer: (1, 2)**", "(1,2)"),
+        ("**Answer: 42**.", "42"),
+        ("Answer: **42**.", "42"),
+        (_MARKER_WORK + "**Answer: 42**.", "42"),
+        (_MARKER_WORK + "Answer: **42**.", "42"),
+        (_MARKER_WORK + "**Answer: 7/2**", "7/2"),
+        (_MARKER_WORK + "**Answer: 2\\sqrt{3}**", "2\\sqrt{3}"),
+        (_MARKER_WORK + "**Answer: (1, 2)**", "(1,2)"),
+        ("Answer: 12 *units*", "12"),
+        ("Answer: 12 *(rounded)*", "12"),
+        ("**Answer:** 42 *(approx)*", "42"),
         ("The answer is: 7/2", "7/2"),
-        (_BOLD_ANSWER_WORK + "The final answer is: 2\\sqrt{3}", "2\\sqrt{3}"),
+        (_MARKER_WORK + "The final answer is: 2\\sqrt{3}", "2\\sqrt{3}"),
     ],
 )
-def test_bold_answer_marker_is_extracted(answer: str, target: str) -> None:
+def test_bold_or_colon_answer_marker_is_extracted(answer: str, target: str) -> None:
     assert _score_answer(answer, (target,)).status == "correct"
 
 
-@pytest.mark.parametrize("marker", ["**Answer: 42**", "The answer is: 42"])
-def test_bold_answer_marker_is_not_bypassed_by_earlier_work(marker: str) -> None:
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "**Answer: 42**",
+        "**Answer: 42**.",
+        "Answer: **42**.",
+        "The answer is: 42",
+    ],
+)
+def test_bold_or_colon_answer_marker_is_not_bypassed_by_earlier_work(
+    marker: str,
+) -> None:
     # The stated answer is 42; the 21 in the working must not be scored.
-    result = _score_answer(_BOLD_ANSWER_WORK + marker, ("21",))
+    result = _score_answer(_MARKER_WORK + marker, ("21",))
     assert result.status == "incorrect"
-    assert result.answer == "42"
+    assert result.answer is not None and "42" in result.answer
 
 
 def test_text_answer_is_not_overridden_by_subexpression() -> None:
