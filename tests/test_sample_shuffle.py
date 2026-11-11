@@ -57,3 +57,18 @@ def test_sample_shuffle_reused_task():
     assert run_ids(2) != shuffled
     assert run_ids(1) == shuffled
     assert [sample.id for sample in task.dataset] == ids
+
+
+def test_sample_shuffle_unseeded_same_order_for_each_model():
+    ids = list(range(100, 200))
+    task = Task(dataset=[Sample(id=id, input=f"Sample {id}") for id in ids])
+    logs = eval(
+        task,
+        model=["mockllm/model", "mockllm/other"],
+        limit=10,
+        sample_shuffle=True,
+    )
+    assert len(logs) == 2
+    sample_ids = [[sample.id for sample in log.samples or []] for log in logs]
+    assert len(sample_ids[0]) == 10
+    assert sample_ids[0] == sample_ids[1]

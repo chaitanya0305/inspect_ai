@@ -116,7 +116,12 @@ from inspect_ai.util._limit import TokenLimit, token_limit_fields
 from inspect_ai.util._notify import build_apprise, init_apprise
 
 from .context import init_eval_context
-from .loader import resolve_task_file_sandbox, resolve_task_source, resolve_tasks
+from .loader import (
+    resolve_sample_shuffle_seed,
+    resolve_task_file_sandbox,
+    resolve_task_source,
+    resolve_tasks,
+)
 from .run import TaskInjection, eval_run
 from .task import Epochs, PreviousTask, Task, TaskSource
 from .task.enqueue import (
@@ -1319,6 +1324,7 @@ def _resolve_enqueued_tasks(
     def resolve() -> list[ResolvedTask]:
         resolved_roles = resolve_model_roles(model_roles)
         resolved: list[ResolvedTask] = []
+        shuffle = resolve_sample_shuffle_seed(sample_shuffle)
         for m in models:
             init_active_model(m, config)
             resolved.extend(
@@ -1328,7 +1334,7 @@ def _resolve_enqueued_tasks(
                     m,
                     resolved_roles,
                     sandbox,
-                    sample_shuffle,
+                    shuffle,
                     checkpoint,
                     input_media_policy="inline_only",
                 )
@@ -2161,6 +2167,7 @@ def eval_resolve_tasks(
         # get_model() then behaves like a @task factory resolved here). The
         # same seed tasks are then fanned out across all models below.
         seed: list[Task] | None = None
+        shuffle = resolve_sample_shuffle_seed(sample_shuffle)
         for i, m in enumerate(models):
             init_active_model(m, config)
             if task_source is not None:
@@ -2176,7 +2183,7 @@ def eval_resolve_tasks(
                     m,
                     resolved_model_roles,
                     sandbox,
-                    sample_shuffle,
+                    shuffle,
                     eval_checkpoint,
                     # warn once (not per model) if args can't be applied. A
                     # TaskSource already consumed task_args to build its seed

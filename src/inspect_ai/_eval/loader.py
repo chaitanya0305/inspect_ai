@@ -3,6 +3,7 @@ import contextlib
 import copy
 import inspect
 import os
+import random
 from dataclasses import replace
 from logging import getLogger
 from pathlib import Path
@@ -277,6 +278,24 @@ def _load_task_source_from_file(
     setattr(source, TASK_FILE_ATTR, task_path.as_posix())
     setattr(source, TASK_RUN_DIR_ATTR, task_path.parent.resolve().as_posix())
     return source
+
+
+def resolve_sample_shuffle_seed(sample_shuffle: bool | int | None) -> bool | int | None:
+    """Draw one seed for an unseeded `sample_shuffle` (`True`).
+
+    Tasks are resolved once per model, and each resolution shuffles its own
+    copy of the dataset. Resolving all models with the same seed gives every
+    model in one `eval()` call the same sample order.
+
+    Args:
+        sample_shuffle: The `sample_shuffle` passed to `eval()`.
+
+    Returns:
+        A random seed if `sample_shuffle` is `True`, otherwise `sample_shuffle`.
+    """
+    if sample_shuffle is True:
+        return random.randrange(2**32)
+    return sample_shuffle
 
 
 def task_with_shuffled_dataset(task: Task, sample_shuffle: bool | int) -> Task:
