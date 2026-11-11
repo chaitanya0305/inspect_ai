@@ -102,13 +102,8 @@ def resolve_tasks(
         )
 
     def as_resolved_tasks(tasks: list[Task]) -> list[ResolvedTask]:
-        # shuffle data in tasks if requested
         if sample_shuffle:
-            for task in tasks:
-                if not task.dataset.shuffled:
-                    task.dataset.shuffle(
-                        None if sample_shuffle is True else sample_shuffle
-                    )
+            tasks = [task_with_shuffled_dataset(task, sample_shuffle) for task in tasks]
 
         return [
             ResolvedTask(
@@ -282,6 +277,31 @@ def _load_task_source_from_file(
     setattr(source, TASK_FILE_ATTR, task_path.as_posix())
     setattr(source, TASK_RUN_DIR_ATTR, task_path.parent.resolve().as_posix())
     return source
+
+
+def task_with_shuffled_dataset(task: Task, sample_shuffle: bool | int) -> Task:
+    """Copy of `task` whose dataset is shuffled for one eval.
+
+    The same `Task` object can be passed to several `eval()` calls, so its
+    dataset is not shuffled in place: that would carry one call's sample
+    order (and seed) into later calls. A dataset that was already shuffled
+    when it was loaded is left as is.
+
+    Args:
+        task: Task to shuffle samples for (not modified).
+        sample_shuffle: `True` for an unseeded shuffle, or an int seed.
+
+    Returns:
+        `task` itself if its dataset is already shuffled, otherwise a shallow
+        copy of `task` with a shuffled copy of its dataset.
+    """
+    if task.dataset.shuffled:
+        return task
+    dataset = task.dataset[:]
+    dataset.shuffle(None if sample_shuffle is True else sample_shuffle)
+    shuffled_task = copy.copy(task)
+    shuffled_task.dataset = dataset
+    return shuffled_task
 
 
 def resolve_previous_tasks(

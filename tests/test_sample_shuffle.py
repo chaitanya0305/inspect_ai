@@ -38,3 +38,22 @@ def check_samples_equal(log1: EvalLog, log2: EvalLog) -> None:
     assert [sample.input for sample in log1.samples] == [
         sample.input for sample in log2.samples
     ]
+
+
+def test_sample_shuffle_reused_task():
+    ids = list(range(100, 200))
+    task = Task(dataset=[Sample(id=id, input=f"Sample {id}") for id in ids])
+
+    def run_ids(sample_shuffle: bool | int | None) -> list[int | str]:
+        log = eval(task, model="mockllm/model", limit=10, sample_shuffle=sample_shuffle)
+        assert log[0].samples
+        return [sample.id for sample in log[0].samples]
+
+    shuffled = run_ids(1)
+    assert shuffled != ids[:10]
+
+    # a later eval of the same Task object applies its own sample_shuffle
+    assert run_ids(None) == ids[:10]
+    assert run_ids(2) != shuffled
+    assert run_ids(1) == shuffled
+    assert [sample.id for sample in task.dataset] == ids
