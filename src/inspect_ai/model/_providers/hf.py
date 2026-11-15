@@ -278,6 +278,7 @@ class HuggingFaceAPI(ModelAPI):
                 generator=generator,
                 decoder=decoder,
                 batch_size=config.max_connections or self.max_connections(),
+                stop_token_ids=self._stop_token_ids(),
             )
         )
 
@@ -325,6 +326,24 @@ class HuggingFaceAPI(ModelAPI):
                 else None
             ),
         )
+
+    def _stop_token_ids(self) -> frozenset[int]:
+        """Token ids `model.generate` ends or pads a sequence with.
+
+        `generate` takes these from the model's generation config (it pads
+        with `eos_token_id` when `pad_token_id` is unset), not the tokenizer.
+        """
+        ids: set[int] = set()
+        generation_config = getattr(self.model, "generation_config", None)
+        for value in (
+            getattr(generation_config, "eos_token_id", None),
+            getattr(generation_config, "pad_token_id", None),
+        ):
+            if isinstance(value, int):
+                ids.add(value)
+            elif isinstance(value, list | tuple):
+                ids.update(v for v in value if isinstance(v, int))
+        return frozenset(ids)
 
     @override
     def max_tokens(self) -> int | None:
@@ -557,6 +576,12 @@ class GenerateInput:
     generator: Generator
     decoder: Decoder
     batch_size: int
+    stop_token_ids: frozenset[int] = frozenset()
+    """Token ids that end a sequence (EOS and padding).
+
+    Batched generation pads finished sequences with these, so a sample's
+    output ends at the first one.
+    """
 
 
 @dataclass
@@ -725,12 +750,20 @@ def _generate_batch(batch: list[_QueueItem]) -> None:
             assert logprobs.shape[1] == generated_tokens.shape[1]
         outputs = decoder(sequences=generated_tokens)
 
+        # inputs are padded to the longest prompt and outputs to the longest
+        # generation in the batch, so count each sample's own tokens
+        input_lengths = attention_mask.sum(dim=1).tolist()
+        output_lengths = [
+            _output_length(row, first_input.stop_token_ids)
+            for row in generated_tokens.tolist()
+        ]
+
         # call back futures
         total_time = time.monotonic() - start_time
         for i, output in enumerate(outputs):
             future = batch[i].future
-            input_tokens = input_ids.size(dim=1)
-            output_tokens = generate_ids.size(dim=1) - input_ids.size(dim=1)
+            input_tokens = int(input_lengths[i])
+            output_tokens = output_lengths[i]
 
             # asyncio futures are not thread safe, so we need to pass the event loop
             # down to this point, so we can mark the future as done in a thread safe manner.
@@ -741,7 +774,9 @@ def _generate_batch(batch: list[_QueueItem]) -> None:
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=input_tokens + output_tokens,
-                    logprobs=logprobs[i] if logprobs is not None else None,
+                    logprobs=(
+                        logprobs[i][:output_tokens] if logprobs is not None else None
+                    ),
                     # slice this sample out of the batch dimension and
                     # materialize to lists here (off the event loop) so each
                     # sample records only its own activations, once
@@ -758,6 +793,14 @@ def _generate_batch(batch: list[_QueueItem]) -> None:
             # exception on it would raise and stop the batch thread
             if not item.future.done():
                 item.future.set_exception(ex)
+
+
+def _output_length(tokens: list[int], stop_token_ids: frozenset[int]) -> int:
+    """Number of generated tokens up to and including the first stop token."""
+    for i, token in enumerate(tokens):
+        if token in stop_token_ids:
+            return i + 1
+    return len(tokens)
 
 
 def extract_logprobs(

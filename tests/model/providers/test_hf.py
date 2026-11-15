@@ -4,7 +4,7 @@ import sys
 from concurrent.futures import Future
 from threading import Thread
 from types import ModuleType, SimpleNamespace
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 from unittest.mock import MagicMock
 
 import anyio
@@ -464,6 +464,14 @@ class _FakeTensor:
         rows, cols = index
         return _FakeTensor([row[cols] for row in self.rows[rows]])
 
+    def sum(self, dim: int) -> SimpleNamespace:
+        assert dim == 1
+        sums = [sum(row) for row in self.rows]
+        return SimpleNamespace(tolist=lambda: sums)
+
+    def tolist(self) -> list[list[int]]:
+        return self.rows
+
 
 class _FakeTokenizer:
     chat_template = None
@@ -724,6 +732,72 @@ async def test_hf_batches_same_model_and_config_together(
 
     assert [result.completion for result in results] == ["a:[101]"] * 3
     assert [sorted(prompts) for prompts, _ in model.calls] == [[1, 2, 3]]
+
+
+class _PaddingTokenizer(_FakeTokenizer):
+    """Prompt "user: N" is N tokens, left-padded to the longest in the batch."""
+
+    pad_token_id = 0
+
+    def __call__(self, input: list[str], **kwargs: Any) -> dict[str, _FakeTensor]:
+        lengths = [int(text.split(":")[1]) for text in input]
+        longest = max(lengths)
+        return {
+            "input_ids": _FakeTensor([[0] * (longest - n) + [7] * n for n in lengths]),
+            "attention_mask": _FakeTensor(
+                [[0] * (longest - n) + [1] * n for n in lengths]
+            ),
+        }
+
+
+class _PaddingModel(_FakeModel):
+    """Generates N tokens for an N-token prompt, ending with EOS.
+
+    Like `transformers`, sequences that finish early are padded with
+    `pad_token_id` to the longest generation in the batch.
+    """
+
+    EOS = 2
+    PAD = 3
+    generation_config = SimpleNamespace(eos_token_id=[EOS], pad_token_id=PAD)
+
+    def generate(
+        self, input_ids: _FakeTensor, attention_mask: _FakeTensor, **kwargs: Any
+    ) -> SimpleNamespace:
+        lengths = [sum(row) for row in attention_mask.rows]
+        longest = max(lengths)
+        return SimpleNamespace(
+            sequences=_FakeTensor(
+                [
+                    row + [5] * (n - 1) + [self.EOS] + [self.PAD] * (longest - n)
+                    for row, n in zip(input_ids.rows, lengths)
+                ]
+            ),
+            logits=None,
+            hidden_states=None,
+        )
+
+
+async def test_hf_batched_usage_excludes_padding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _hf_provider_with_fake_deps(monkeypatch) as provider:
+        tokenizer = _PaddingTokenizer("a")
+        api = _fake_hf_api_with_tokenizer(
+            provider,
+            "a",
+            _PaddingModel(0),
+            cast(Any, tokenizer),
+            use_chat_template=False,
+        )
+        results = await _generate_drained_together(
+            provider,
+            [(api, GenerateConfig(), prompt) for prompt in ["2", "10"]],
+        )
+
+    usage = [(r.usage.input_tokens, r.usage.output_tokens) for r in results]
+    assert usage == [(2, 2), (10, 10)]
+    assert [r.usage.total_tokens for r in results] == [4, 20]
 
 
 async def test_hf_batches_respect_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
