@@ -387,6 +387,60 @@ async def test_mistral_chat_forwards_reasoning_effort() -> None:
     assert await request_effort(GenerateConfig()) == "OMITTED"
 
 
+@skip_if_no_mistral_package
+async def test_mistral_chat_forwards_sampling_config() -> None:
+    """Stop sequences, penalties and num_choices must reach the chat request."""
+    from unittest import mock
+    from unittest.mock import AsyncMock
+
+    from inspect_ai.model._providers.mistral import MistralAPI
+
+    api = MistralAPI(
+        model_name="mistral/mistral-small-latest",
+        api_key="test-key",
+        conversation_api=False,
+    )
+
+    async def request_params(config: GenerateConfig) -> dict[str, object]:
+        captured: dict[str, object] = {}
+
+        async def _capture(**kwargs: object) -> object:
+            captured.update(kwargs)
+            raise RuntimeError("stop after capture")
+
+        client = _mock_mistral_client()
+        client.chat.complete_async = AsyncMock(side_effect=_capture)
+
+        with mock.patch(
+            "inspect_ai.model._providers.mistral.Mistral", return_value=client
+        ):
+            with pytest.raises(RuntimeError, match="stop after capture"):
+                await api.generate(
+                    input=[ChatMessageUser(content="hi")],
+                    tools=[],
+                    tool_choice="none",
+                    config=config,
+                )
+        return captured
+
+    params = await request_params(
+        GenerateConfig(
+            stop_seqs=["END"],
+            presence_penalty=0.5,
+            frequency_penalty=0.25,
+            num_choices=2,
+        )
+    )
+    assert params["stop"] == ["END"]
+    assert params["presence_penalty"] == 0.5
+    assert params["frequency_penalty"] == 0.25
+    assert params["n"] == 2
+
+    params = await request_params(GenerateConfig())
+    for key in ("stop", "presence_penalty", "frequency_penalty", "n"):
+        assert key not in params
+
+
 # -- Streaming (on_stream) ------------------------------------------------------
 
 

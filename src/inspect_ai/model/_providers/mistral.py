@@ -298,6 +298,14 @@ class MistralAPI(ModelAPI):
                     request["max_tokens"] = config.max_tokens
                 if config.seed is not None:
                     request["random_seed"] = config.seed
+                if config.stop_seqs is not None:
+                    request["stop"] = config.stop_seqs
+                if config.presence_penalty is not None:
+                    request["presence_penalty"] = config.presence_penalty
+                if config.frequency_penalty is not None:
+                    request["frequency_penalty"] = config.frequency_penalty
+                if config.num_choices is not None:
+                    request["n"] = config.num_choices
                 if config.response_schema is not None:
                     request["response_format"] = MistralResponseFormat(
                         type="json_schema",
