@@ -14,7 +14,7 @@ from logging import getLogger
 from queue import Empty, Queue
 from threading import Thread
 from types import MethodType
-from typing import Any, Hashable, Literal, Protocol, cast
+from typing import Any, Hashable, Literal, NamedTuple, Protocol, cast
 
 import anyio
 import numpy as np
@@ -278,7 +278,7 @@ class HuggingFaceAPI(ModelAPI):
                 generator=generator,
                 decoder=decoder,
                 batch_size=config.max_connections or self.max_connections(),
-                stop_token_ids=self._stop_token_ids(),
+                end_tokens=self._end_tokens(),
             )
         )
 
@@ -327,23 +327,25 @@ class HuggingFaceAPI(ModelAPI):
             ),
         )
 
-    def _stop_token_ids(self) -> frozenset[int]:
-        """Token ids `model.generate` ends or pads a sequence with.
+    def _end_tokens(self) -> "EndTokens":
+        """Token ids `model.generate` ends and pads a sequence with.
 
-        `generate` takes these from the model's generation config (it pads
-        with `eos_token_id` when `pad_token_id` is unset), not the tokenizer.
+        `generate` takes these from the model's generation config, not the
+        tokenizer, and pads with the first EOS id when `pad_token_id` is unset.
         """
-        ids: set[int] = set()
         generation_config = getattr(self.model, "generation_config", None)
-        for value in (
-            getattr(generation_config, "eos_token_id", None),
-            getattr(generation_config, "pad_token_id", None),
-        ):
-            if isinstance(value, int):
-                ids.add(value)
-            elif isinstance(value, list | tuple):
-                ids.update(v for v in value if isinstance(v, int))
-        return frozenset(ids)
+        eos = getattr(generation_config, "eos_token_id", None)
+        eos_ids = (
+            [eos]
+            if isinstance(eos, int)
+            else [v for v in eos if isinstance(v, int)]
+            if isinstance(eos, list | tuple)
+            else []
+        )
+        pad = getattr(generation_config, "pad_token_id", None)
+        if not isinstance(pad, int):
+            pad = eos_ids[0] if eos_ids else None
+        return EndTokens(eos_token_ids=frozenset(eos_ids), pad_token_id=pad)
 
     @override
     def max_tokens(self) -> int | None:
@@ -568,6 +570,13 @@ class Decoder(Protocol):
     def __call__(self, sequences: Tensor) -> list[str]: ...
 
 
+class EndTokens(NamedTuple):
+    """Token ids `model.generate` ends a sequence with and pads it with."""
+
+    eos_token_ids: frozenset[int]
+    pad_token_id: int | None
+
+
 @dataclass
 class GenerateInput:
     input: str
@@ -576,12 +585,8 @@ class GenerateInput:
     generator: Generator
     decoder: Decoder
     batch_size: int
-    stop_token_ids: frozenset[int] = frozenset()
-    """Token ids that end a sequence (EOS and padding).
-
-    Batched generation pads finished sequences with these, so a sample's
-    output ends at the first one.
-    """
+    end_tokens: EndTokens | None = None
+    """EOS and padding ids, used to find where each sample's output ends."""
 
 
 @dataclass
@@ -754,7 +759,7 @@ def _generate_batch(batch: list[_QueueItem]) -> None:
         # generation in the batch, so count each sample's own tokens
         input_lengths = attention_mask.sum(dim=1).tolist()
         output_lengths = [
-            _output_length(row, first_input.stop_token_ids)
+            _output_length(row, first_input.end_tokens)
             for row in generated_tokens.tolist()
         ]
 
@@ -795,11 +800,22 @@ def _generate_batch(batch: list[_QueueItem]) -> None:
                 item.future.set_exception(ex)
 
 
-def _output_length(tokens: list[int], stop_token_ids: frozenset[int]) -> int:
-    """Number of generated tokens up to and including the first stop token."""
+def _output_length(tokens: list[int], end_tokens: EndTokens | None) -> int:
+    """Number of tokens a sample generated, excluding batch padding.
+
+    Counts up to and including the first EOS id, or up to (not including) the
+    first pad id, which follows a sequence that ended on a stop string. When
+    the pad id is also an EOS id the two cases look the same, so a sample that
+    ended on a stop string counts one token too many. A generated token equal
+    to the pad id (when it is not an EOS id) also ends the count.
+    """
+    if end_tokens is None:
+        return len(tokens)
     for i, token in enumerate(tokens):
-        if token in stop_token_ids:
+        if token in end_tokens.eos_token_ids:
             return i + 1
+        if token == end_tokens.pad_token_id:
+            return i
     return len(tokens)
 
 

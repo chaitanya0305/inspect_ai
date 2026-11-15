@@ -472,6 +472,10 @@ class _FakeTensor:
     def tolist(self) -> list[list[int]]:
         return self.rows
 
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (len(self.rows), len(self.rows[0]))
+
 
 class _FakeTokenizer:
     chat_template = None
@@ -798,6 +802,122 @@ async def test_hf_batched_usage_excludes_padding(
     usage = [(r.usage.input_tokens, r.usage.output_tokens) for r in results]
     assert usage == [(2, 2), (10, 10)]
     assert [r.usage.total_tokens for r in results] == [4, 20]
+
+
+class _FakeLogprobs:
+    """Stands in for the stacked `[batch, step, vocab]` logprobs tensor."""
+
+    def __init__(self, rows: list[list[float]]) -> None:
+        self.rows = rows
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (len(self.rows), len(self.rows[0]))
+
+    def __getitem__(self, index: int) -> list[float]:
+        return self.rows[index]
+
+
+@pytest.mark.parametrize(
+    ("generation_config", "outputs", "expected"),
+    [
+        pytest.param(
+            SimpleNamespace(eos_token_id=[2], pad_token_id=3),
+            [[5, 2, 3, 3], [5, 5, 5, 2]],
+            [2, 4],
+            id="eos-then-pad",
+        ),
+        pytest.param(
+            SimpleNamespace(eos_token_id=2, pad_token_id=None),
+            [[5, 2, 2, 2], [5, 5, 5, 2]],
+            [2, 4],
+            id="pad-is-eos",
+        ),
+        pytest.param(
+            SimpleNamespace(eos_token_id=2, pad_token_id=3),
+            [[5, 5, 2, 3], [5, 5, 5, 5]],
+            [3, 4],
+            id="int-eos",
+        ),
+        pytest.param(
+            # the first sample ended on a stop string (token 9), not EOS
+            SimpleNamespace(eos_token_id=[2], pad_token_id=3),
+            [[5, 9, 3, 3], [5, 5, 5, 2]],
+            [2, 4],
+            id="stop-string",
+        ),
+    ],
+)
+def test_hf_generate_batch_trims_padding(
+    monkeypatch: pytest.MonkeyPatch,
+    generation_config: SimpleNamespace,
+    outputs: list[list[int]],
+    expected: list[int],
+) -> None:
+    with _hf_provider_with_fake_deps(monkeypatch) as provider:
+        model = SimpleNamespace(generation_config=generation_config)
+        end_tokens = provider.HuggingFaceAPI._end_tokens(SimpleNamespace(model=model))
+
+        # step-major logits, one value per sample, as `generate` returns them
+        steps = len(outputs[0])
+        logits = tuple(
+            [float(10 * b + t) for b in range(len(outputs))] for t in range(steps)
+        )
+        monkeypatch.setattr(
+            provider.torch,
+            "stack",
+            lambda steps: SimpleNamespace(
+                transpose=lambda *dims: _FakeLogprobs(
+                    [list(row) for row in zip(*steps)]
+                )
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            provider.torch,
+            "nn",
+            SimpleNamespace(functional=SimpleNamespace(log_softmax=lambda x, dim: x)),
+            raising=False,
+        )
+
+        # one-token prompts, so the generated tokens follow column 0
+        input_ids = _FakeTensor([[7] for _ in outputs])
+
+        def generator(input_ids: _FakeTensor, attention_mask: _FakeTensor) -> Any:
+            return SimpleNamespace(
+                sequences=_FakeTensor(
+                    [row + out for row, out in zip(input_ids.rows, outputs)]
+                ),
+                logits=logits,
+                hidden_states=None,
+            )
+
+        items = [
+            provider._QueueItem(
+                input=provider.GenerateInput(
+                    input=f"user: {i}",
+                    device="cpu",
+                    tokenizer=lambda texts: {
+                        "input_ids": input_ids,
+                        "attention_mask": _FakeTensor([[1] for _ in texts]),
+                    },
+                    generator=generator,
+                    decoder=lambda sequences: [str(r) for r in sequences.rows],
+                    batch_size=len(outputs),
+                    end_tokens=end_tokens,
+                ),
+                future=Future(),
+                key=None,
+            )
+            for i in range(len(outputs))
+        ]
+        provider._generate_batch(items)
+        results = [item.future.result(timeout=0) for item in items]
+
+    assert [r.output_tokens for r in results] == expected
+    assert [r.input_tokens for r in results] == [1] * len(outputs)
+    assert [len(r.logprobs) for r in results] == expected
+    assert results[0].logprobs == [float(t) for t in range(expected[0])]
 
 
 async def test_hf_batches_respect_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
