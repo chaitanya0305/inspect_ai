@@ -23,6 +23,14 @@ def test_task_and_eval_metadata():
     assert log.eval.metadata == TEST_METADATA | TEST_METADATA_2
 
 
+def test_eval_metadata_overrides_task_metadata_key():
+    log = eval(
+        Task(metadata={"run": "task", "task_only": 1}),
+        metadata={"run": "eval", "eval_only": 2},
+    )[0]
+    assert log.eval.metadata == {"run": "eval", "task_only": 1, "eval_only": 2}
+
+
 def test_task_tags():
     log = eval(Task(tags=TEST_TAGS))[0]
     assert sorted(log.eval.tags) == sorted(TEST_TAGS)
