@@ -1,4 +1,5 @@
-from typing import Any, Type, TypeVar
+from types import UnionType
+from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -168,8 +169,11 @@ class StoreModel(BaseModel):
         if field_type is None:
             return value
 
-        # Skip coercion for scalar types (they don't need it)
-        if self._is_scalar(value):
+        # Skip coercion for scalars that already have the field's type. A
+        # scalar of another type still needs it: e.g. an Enum or datetime
+        # field holds its JSON form (int/str) when the store is read back
+        # from a log.
+        if self._is_scalar(value) and _scalar_has_type(value, field_type):
             return value
 
         # For everything else, attempt coercion with TypeAdapter
@@ -191,6 +195,25 @@ class StoreModel(BaseModel):
         return isinstance(value, str | int | float | bool | type(None) | bytes)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+def _scalar_has_type(value: Any, field_type: Any) -> bool:
+    """Whether a scalar `value` already satisfies `field_type` without coercion."""
+    if field_type is Any:
+        return True
+    origin = get_origin(field_type)
+    if origin is Literal:
+        return value in get_args(field_type)
+    candidates = get_args(field_type) if origin in (Union, UnionType) else (field_type,)
+    return any(
+        candidate is Any
+        or (
+            isinstance(candidate, type)
+            and get_origin(candidate) is None
+            and isinstance(value, candidate)
+        )
+        for candidate in candidates
+    )
 
 
 SMT = TypeVar("SMT", bound=StoreModel)

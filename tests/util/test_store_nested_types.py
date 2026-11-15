@@ -1,6 +1,8 @@
 """Tests for StoreModel with nested types (Pydantic models, TypedDicts, dataclasses, etc.)"""
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel, Field
@@ -330,6 +332,37 @@ def test_scalar_values_not_coerced() -> None:
     assert model.flag is True
     assert model.nothing is None
     assert model.data == b"binary"
+
+
+class Phase(Enum):
+    PLAN = 1
+    ACT = 2
+
+
+def test_scalar_json_values_coerced_to_field_type() -> None:
+    """Scalars in JSON form (as read back from a log) are coerced to the field type."""
+
+    class JsonScalarStore(StoreModel):
+        phase: Phase = Phase.PLAN
+        started: datetime | None = None
+        count: int = 0
+        label: str = ""
+
+    store = Store()
+    store.set("JsonScalarStore:phase", 2)
+    store.set("JsonScalarStore:started", "2026-01-02T03:04:05Z")
+    store.set("JsonScalarStore:count", 3)
+    store.set("JsonScalarStore:label", "x")
+
+    model = JsonScalarStore(store=store)
+    assert model.phase is Phase.ACT
+    assert model.started == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert model.count == 3
+    assert model.label == "x"
+
+    # a lax-valid assignment reads back as the field type
+    setattr(model, "count", "5")
+    assert model.count == 5
 
 
 def test_coercion_caching():
