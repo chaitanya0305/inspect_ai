@@ -100,15 +100,27 @@ class LocalSandboxEnvironment(SandboxEnvironment):
                 self._SANDBOX_TOOLS_DIR_ENV: str(self._sandbox_tools_dir),
             }
 
-        result = await subprocess(
-            args=cmd,
-            input=input,
-            cwd=final_cwd,
-            env=final_env,
-            timeout=timeout,
-            output_limit=SandboxEnvironmentLimits.MAX_EXEC_OUTPUT_SIZE,
-            concurrency=concurrency,
-        )
+        try:
+            result = await subprocess(
+                args=cmd,
+                input=input,
+                cwd=final_cwd,
+                env=final_env,
+                timeout=timeout,
+                output_limit=SandboxEnvironmentLimits.MAX_EXEC_OUTPUT_SIZE,
+                concurrency=concurrency,
+            )
+        except FileNotFoundError as ex:
+            # a missing cwd still raises; a missing executable is a failed
+            # result (exit 127, as from a shell), per the exec() contract
+            if not final_cwd.is_dir():
+                raise
+            return ExecResult(
+                success=False,
+                returncode=127,
+                stdout="",
+                stderr=f"{cmd[0]}: {ex.strerror or 'No such file or directory'}\n",
+            )
         return result
 
     async def _stop_sandbox_tools(self, *, timeout: int) -> None:

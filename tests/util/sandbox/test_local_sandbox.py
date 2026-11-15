@@ -64,6 +64,20 @@ async def test_local_exec_requires_current_user(
         sandbox.directory.cleanup()
 
 
+async def test_local_exec_missing_executable_returns_failed_result() -> None:
+    sandbox = LocalSandboxEnvironment()
+    try:
+        result = await sandbox.exec(["inspect-no-such-executable", "arg"])
+        assert not result.success
+        assert result.returncode == 127
+        assert "inspect-no-such-executable" in result.stderr
+
+        with pytest.raises(FileNotFoundError):
+            await sandbox.exec(["true"], cwd="no-such-dir")
+    finally:
+        sandbox.directory.cleanup()
+
+
 async def test_local_sandbox_scopes_server_dir_per_instance() -> None:
     sandbox_a = LocalSandboxEnvironment()
     sandbox_b = LocalSandboxEnvironment()
