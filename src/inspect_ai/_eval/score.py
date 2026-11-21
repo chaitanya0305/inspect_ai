@@ -254,6 +254,7 @@ async def score_async(
     samples: Callable[[int], AsyncContextManager[EvalSample]] | None = None,
     *,
     _log_scorers: bool = False,
+    _sample_count: int | None = None,
 ) -> EvalLog:
     """Score an evaluation log.
 
@@ -327,6 +328,10 @@ async def score_async(
 
         samples = _read_sample
         total_samples = len(_samples)
+    elif _sample_count is not None:
+        # the samples the log holds, which is fewer than the planned
+        # `results.total_samples` when samples were early-stopped or never run
+        total_samples = _sample_count
     else:
         total_samples = log.results.total_samples if log.results else None
 

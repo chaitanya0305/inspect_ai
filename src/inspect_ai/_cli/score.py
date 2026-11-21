@@ -229,11 +229,13 @@ async def score(
     write_recorder = create_recorder_for_location(output_file, log_dir)
 
     read_sample = None
+    sample_count: int | None = None
     if stream:
         # an existing output (often the input, which later samples are read
         # from) is only replaced by log_finish
         new_output = not filesystem(output_file).exists(local_path(output_file))
         sample_map = await recorder.read_log_sample_ids(log_file)
+        sample_count = len(sample_map)
         stream_batch = len(sample_map) if stream is True else stream
         semaphore = anyio.Semaphore(stream_batch)
         samples_written = 0
@@ -269,6 +271,7 @@ async def score(
         copy=False,
         samples=read_sample,
         _log_scorers=scorer is None,
+        _sample_count=sample_count,
     )
 
     if stream:

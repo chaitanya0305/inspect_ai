@@ -2,13 +2,16 @@ import pathlib
 
 import pytest
 import rich
+from pydantic import JsonValue
 from test_helpers.utils import skip_if_no_openai
 
+from inspect_ai import Task, eval_async
 from inspect_ai._cli import score as score_cli
 from inspect_ai._cli.score import print_results, score
 from inspect_ai._display import display
 from inspect_ai._display.core.results import sample_coverage_messages
 from inspect_ai._eval.score import ScoreAction
+from inspect_ai.dataset import Sample
 from inspect_ai.log import EvalLog, read_eval_log_async, write_eval_log_async
 from inspect_ai.log._edit import (
     MetadataEdit,
@@ -26,6 +29,7 @@ from inspect_ai.log._log import (
     EvalStats,
 )
 from inspect_ai.log._recorders import Recorder, create_recorder_for_location
+from inspect_ai.scorer import includes
 from inspect_ai.util._early_stopping import EarlyStop, EarlyStoppingSummary
 
 LOGS_DIR = pathlib.Path(__file__).parents[1] / "scorer/logs"
@@ -166,6 +170,7 @@ async def test_score_stream_preserves_log_updates(
         copy,
         samples,
         _log_scorers,
+        _sample_count,
     ):
         assert samples is not None
         return log
@@ -282,6 +287,7 @@ async def test_score_stream_flushes_periodically(
         copy,
         samples,
         _log_scorers,
+        _sample_count,
     ):
         assert samples is not None
         for idx in range(10):
@@ -352,6 +358,65 @@ async def test_score_stream_in_place_failure_leaves_the_log_unchanged(
     finally:
         # score() does not discard the write recorder when scoring fails
         await recorders[-1].log_discard(log.eval, keep_destination=True)
+
+
+class _StopFirstTwo:
+    """Early-stops samples 1 and 2, so the log holds fewer samples than planned."""
+
+    async def start_task(self, task: EvalSpec, samples: object, epochs: int) -> str:
+        return "stop_first_two"
+
+    async def schedule_sample(self, id: str | int, epoch: int) -> EarlyStop | None:
+        return EarlyStop(id=id, epoch=epoch) if id in (1, 2) else None
+
+    async def complete_sample(self, id: str | int, epoch: int, scores: object) -> None:
+        pass
+
+    async def complete_task(self) -> dict[str, JsonValue]:
+        return {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stream", [True, 2], ids=["stream", "stream-batch"])
+async def test_score_stream_scores_a_log_with_early_stopped_samples(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, stream: int | bool
+) -> None:
+    """`--stream` scores the samples the log holds, not the planned count."""
+    task = Task(
+        dataset=[
+            Sample(id=i, input="x", target="Default" if i != 4 else "zzz")
+            for i in range(1, 6)
+        ],
+        scorer=includes(),
+        early_stopping=_StopFirstTwo(),
+    )
+    (log,) = await eval_async(task, model="mockllm/model", log_dir=str(tmp_path))
+    assert log.results is not None
+    assert log.results.total_samples == 5
+    assert log.samples is not None and len(log.samples) == 3
+
+    monkeypatch.setattr(score_cli, "print_results", lambda *args, **kwargs: None)
+    results: dict[str, EvalResults | None] = {}
+    for mode in (False, stream):
+        output_file = tmp_path / f"rescored-{mode}.eval"
+        await score(
+            log_dir="",
+            log_file=log.location,
+            action="overwrite",
+            log_level=None,
+            output_file=str(output_file),
+            overwrite=True,
+            scorer=None,
+            s=(),
+            metric=None,
+            stream=mode,
+        )
+        results[str(mode)] = (await read_eval_log_async(str(output_file))).results
+
+    no_stream, streamed = results["False"], results[str(stream)]
+    assert no_stream is not None and streamed is not None
+    assert streamed.model_dump() == no_stream.model_dump()
+    assert streamed.scores[0].metrics["accuracy"].value == pytest.approx(2 / 3)
 
 
 def early_stops(count: int) -> EarlyStoppingSummary:
