@@ -614,10 +614,15 @@ def _partition_list_scores(scores: list[Score]) -> list[Score]:
 def _reduced_score(value: Value, scores: list[Score]) -> Score:
     r"""Create a Score based upon a single Value and list of Scores that produced it
 
+    Metadata comes from the first scored (not NaN-at-root) score, since the
+    reduced value comes only from scored epochs and metrics such as
+    `perplexity_per_token()` read the scorer's metadata alongside it.
+
     Args:
         value: the reduced Value
         scores: ths list of scores being reduced
     """
+    metadata_source = _first_scored(scores) or scores[0]
     return Score(
         value=value,
         # retain remaining fields only if equal across all Scores
@@ -630,7 +635,7 @@ def _reduced_score(value: Value, scores: list[Score]) -> Score:
         reason=scores[0].reason
         if len(set(score.reason for score in scores)) == 1
         else None,
-        metadata=scores[0].metadata,
+        metadata=metadata_source.metadata,
     )
 
 

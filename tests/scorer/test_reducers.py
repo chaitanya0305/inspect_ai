@@ -470,6 +470,65 @@ def test_reducer_preserve_metadata() -> None:
         assert reduced.metadata == simple_scores[0].metadata
 
 
+def test_reducer_metadata_from_first_scored_epoch() -> None:
+    # The reduced value comes from the scored epochs only, so its metadata
+    # must too: an unscored first epoch has none of the scorer's metadata.
+    scores = [
+        Score.unscored(reason="scoring_failed", metadata={"failed": True}),
+        Score(value=1, metadata={"num_tokens": 10}),
+        Score(value=0, metadata={"num_tokens": 12}),
+    ]
+    reducers = [
+        avg_reducer,
+        median_reducer,
+        mode_reducer,
+        majority_reducer,
+        max_reducer,
+        at_least_3_reducer,
+        pass_at_2_no_threshhold,
+        pass_k_2_no_threshold,
+        collect_reducer,
+    ]
+    for reducer in reducers:
+        reduced = reducer(scores)
+        assert reduced.metadata is not None
+        assert reduced.metadata["num_tokens"] == 10
+
+    # every epoch unscored: the first epoch's metadata is kept
+    unscored = [Score.unscored(metadata={"epoch": 1}), Score.unscored()]
+    assert avg_reducer(unscored).metadata == {"epoch": 1}
+
+
+def test_perplexity_with_unscored_first_epoch() -> None:
+    from inspect_ai.scorer import perplexity_per_token
+
+    def nll(sample_id: int, num_tokens: int, sum_log_probs: float) -> SampleScore:
+        return SampleScore(
+            score=Score(
+                value=-sum_log_probs / num_tokens,
+                metadata={"num_tokens": num_tokens, "sum_log_probs": sum_log_probs},
+            ),
+            sample_id=sample_id,
+        )
+
+    scores = [
+        SampleScore(score=Score.unscored(reason="scoring_failed"), sample_id=1),
+        nll(1, 10, -20.0),
+        nll(2, 10, -10.0),
+        nll(2, 10, -10.0),
+    ]
+    info = ScorerInfo.from_name("perplexity")
+    info.metrics = [perplexity_per_token()]
+    eval_scores, _ = compute_eval_scores_for_views(
+        scores, info.metrics, "perplexity", info, None
+    )
+    # sample 1 contributes its scored epoch (10 tokens, -20), sample 2 its
+    # first epoch (10 tokens, -10)
+    assert eval_scores[0].metrics["perplexity_per_token"].value == pytest.approx(
+        np.exp(30 / 20)
+    )
+
+
 def test_reducer_preserve_reason_all_nan() -> None:
     """Reason retention across epochs when all scores are unscored (NaN).
 
