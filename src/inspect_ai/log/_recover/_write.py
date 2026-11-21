@@ -23,6 +23,7 @@ from inspect_ai.log._log import (
     EvalStatus,
 )
 from inspect_ai.log._metric import LogMetrics
+from inspect_ai.log._metric_metadata import MetricSampleMetadata, find_sample_init
 from inspect_ai.log._recorders.buffer.filestore import SampleBufferFilestore
 from inspect_ai.log._recorders.eval import EvalRecorder, _sample_filename
 from inspect_ai.model._model_output import ModelUsage
@@ -148,7 +149,7 @@ async def write_recovered_eval_log(
     Returns:
         The written EvalLog (header only, samples on disk).
     """
-    from inspect_ai._eval.task.results import eval_results
+    from inspect_ai._eval.task.results import eval_results, unique_scorer_names
     from inspect_ai._util.file import dirname
     from inspect_ai.scorer._metric import SampleScore
 
@@ -164,6 +165,10 @@ async def write_recovered_eval_log(
     written_keys: set[str] = set()
     stats_acc = _StatsAccumulator(crashed)
     scores_acc: list[dict[str, SampleScore]] = []
+    declared_scorers = (
+        set(unique_scorer_names(metrics.scorers)) if metrics is not None else set()
+    )
+    metric_metadata = MetricSampleMetadata()
 
     async def _write_sample(sample: EvalSample, in_progress: bool = False) -> None:
         nonlocal sample_count, failed_count, in_progress_count
@@ -172,12 +177,19 @@ async def write_recovered_eval_log(
         written_keys.add(_sample_filename(sample.id, sample.epoch))
         stats_acc.add_sample(sample)
         if sample.scores:
+            sample_init = find_sample_init(sample.events)
             scores_acc.append(
                 {
                     name: SampleScore(
                         score=score,
                         sample_id=sample.id,
-                        sample_metadata=sample.metadata,
+                        sample_metadata=metric_metadata.metadata(
+                            declared_scorer=name in declared_scorers,
+                            sample_id=sample.id,
+                            epoch=sample.epoch,
+                            sample_init=sample_init,
+                            final_metadata=sample.metadata,
+                        ),
                     )
                     for name, score in sample.scores.items()
                 }
@@ -252,7 +264,13 @@ async def write_recovered_eval_log(
                             name: SampleScore(
                                 score=score,
                                 sample_id=written.summary.id,
-                                sample_metadata=written.metadata,
+                                sample_metadata=metric_metadata.metadata(
+                                    declared_scorer=name in declared_scorers,
+                                    sample_id=written.summary.id,
+                                    epoch=written.summary.epoch,
+                                    sample_init=written.sample_init,
+                                    final_metadata=written.metadata,
+                                ),
                             )
                             for name, score in written.scores.items()
                         }
@@ -281,6 +299,7 @@ async def write_recovered_eval_log(
     )
 
     if metrics is not None:
+        metric_metadata.warn()
         try:
             results, reductions = eval_results(
                 samples=sample_count,

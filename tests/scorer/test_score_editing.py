@@ -1,5 +1,6 @@
 """Tests for score editing functionality."""
 
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,6 +31,7 @@ from inspect_ai.scorer import (
     match,
     mean,
     scorer,
+    stderr,
 )
 from inspect_ai.scorer._metric import ScoreEdit, score_is_excluded
 from inspect_ai.scorer._scorer import Scorer
@@ -583,25 +585,48 @@ async def test_recompute_metrics_when_task_has_no_scorers():
 
 
 @solver
-def solver_relabels_category() -> Solver:
+def solver_relabels_category(set_score: bool = False) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         state.metadata["category"] = "relabelled"
+        if set_score:
+            state.scores = {"solver_score": _score_for_sample_one(state)}
         return state
 
     return solve
 
 
-@scorer(metrics=[grouped(accuracy(), "category")])
+def _score_for_sample_one(state: TaskState) -> Score:
+    return Score(value="C" if state.sample_id == 1 else "I")
+
+
+@scorer(metrics=[grouped(accuracy(), "category"), stderr(cluster="category")])
 def correct_for_sample_one() -> Scorer:
     async def score(state: TaskState, target: Target) -> Score:
-        return Score(value="C" if state.sample_id == 1 else "I")
+        return _score_for_sample_one(state)
 
     return score
 
 
-def _grouped_values(log: EvalLog) -> dict[str, float]:
+def _category_task(**kwargs: Any) -> Task:
+    return Task(
+        dataset=MemoryDataset(
+            [
+                Sample(id=1, input="a", metadata={"category": "x"}),
+                Sample(id=2, input="b", metadata={"category": "y"}),
+            ]
+        ),
+        **kwargs,
+    )
+
+
+def _metric_values(log: EvalLog) -> dict[str, float]:
     assert log.results is not None
     return {k: v.value for k, v in log.results.scores[0].metrics.items()}
+
+
+# grouped by the dataset categories; the clustered stderr has two clusters
+# (with the relabelled metadata it has one, and is 0)
+DATASET_CATEGORY_METRICS = {"x": 1.0, "y": 0.0, "all": 0.5, "stderr": 0.5}
 
 
 @pytest.mark.anyio
@@ -611,25 +636,61 @@ async def test_recomputed_metrics_group_by_dataset_metadata():
     A solver changing the grouping key in TaskState.metadata changes the
     logged sample metadata, but the run's metrics used the dataset metadata.
     """
-    task = Task(
-        dataset=MemoryDataset(
-            [
-                Sample(id=1, input="a", metadata={"category": "x"}),
-                Sample(id=2, input="b", metadata={"category": "y"}),
-            ]
-        ),
-        solver=solver_relabels_category(),
-        scorer=correct_for_sample_one(),
+    task = _category_task(
+        solver=solver_relabels_category(), scorer=correct_for_sample_one()
     )
     log = (await eval_async(task, model="mockllm/model"))[0]
-    expected = {"x": 1.0, "y": 0.0, "all": 0.5}
-    assert _grouped_values(log) == expected
+    assert _metric_values(log) == DATASET_CATEGORY_METRICS
 
     recompute_metrics(log)
-    assert _grouped_values(log) == expected
+    assert _metric_values(log) == DATASET_CATEGORY_METRICS
+
+    # a score edit that changes no value leaves the metrics as they were
+    edit_score(log, 1, "correct_for_sample_one", ScoreEdit(explanation="clarified"))
+    assert _metric_values(log) == DATASET_CATEGORY_METRICS
 
     rescored = await score_async(log, [correct_for_sample_one()], action="overwrite")
-    assert _grouped_values(rescored) == expected
+    assert _metric_values(rescored) == DATASET_CATEGORY_METRICS
+
+
+@pytest.mark.anyio
+async def test_recomputed_metrics_of_solver_set_scores_use_final_metadata():
+    """A solver-set score's metrics get the final metadata, in the run and on recompute."""
+    task = _category_task(
+        solver=solver_relabels_category(set_score=True),
+        metrics=[grouped(accuracy(), "category")],
+    )
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    expected = {"relabelled": 0.5, "all": 0.5}
+    assert _metric_values(log) == expected
+
+    recompute_metrics(log)
+    assert _metric_values(log) == expected
+
+
+@pytest.mark.anyio
+async def test_recomputed_metrics_without_sample_init_warn(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Samples without a sample_init event fall back to their final metadata, with a warning."""
+    task = _category_task(
+        solver=solver_relabels_category(), scorer=correct_for_sample_one()
+    )
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    assert log.samples is not None
+    for sample in log.samples:
+        sample.events = []
+
+    with caplog.at_level(logging.WARNING):
+        recompute_metrics(log)
+
+    assert _metric_values(log) == {"relabelled": 0.5, "all": 0.5, "stderr": 0.0}
+    warnings = [
+        r.getMessage() for r in caplog.records if "sample_init" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "2 sample(s)" in warnings[0]
+    assert "1 (epoch 1), 2 (epoch 1)" in warnings[0]
 
 
 def test_resolve_scorers_info_loads_task_file_metrics_once(

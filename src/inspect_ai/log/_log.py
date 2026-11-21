@@ -749,23 +749,6 @@ class EvalSample(BaseModel):
     model_config = ConfigDict(protected_namespaces=(), ser_json_inf_nan="constants")
 
 
-def sample_dataset_metadata(sample: EvalSample) -> dict[str, Any] | None:
-    """Dataset metadata of a logged sample, as a fresh run gives it to metrics.
-
-    `EvalSample.metadata` is the final `TaskState.metadata`, which solvers may
-    have changed, while a fresh run passes the dataset metadata to scorer
-    metrics (e.g. the `grouped()` key or the `stderr()` cluster). The sample's
-    `SampleInitEvent` records the dataset metadata. A sample logged without
-    that event falls back to `EvalSample.metadata`.
-    """
-    from inspect_ai.event._sample_init import SampleInitEvent
-
-    for event in sample.events:
-        if isinstance(event, SampleInitEvent):
-            return event.sample.metadata
-    return sample.metadata
-
-
 class EvalEvents(BaseModel):
     events: list[DiscriminatedEvent] = Field(default_factory=list)
     """List of events."""

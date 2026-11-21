@@ -68,11 +68,8 @@ from inspect_ai.log._condense import (
     resolve_sample_attachments,
 )
 from inspect_ai.log._headline import headline_metric_ref, resolve_headline_metric
-from inspect_ai.log._log import (
-    EvalMetricDefinition,
-    EvalSample,
-    sample_dataset_metadata,
-)
+from inspect_ai.log._log import EvalMetricDefinition, EvalSample
+from inspect_ai.log._metric_metadata import MetricSampleMetadata, find_sample_init
 from inspect_ai.log._resolve import rebind_sample_timelines
 from inspect_ai.log._score import _find_scorers_span
 from inspect_ai.log._transcript import Transcript, init_transcript, transcript
@@ -365,6 +362,7 @@ async def score_async(
         # tally the per-sample error state as we go so an overwrite can restate
         # completed_samples exactly rather than falling back to len(scores)
         sample_completed: list[bool] = [False] * total_samples
+        metric_metadata = MetricSampleMetadata()
 
         async def _score_sample(idx_sample: int) -> None:
             nonlocal scorer_names
@@ -381,7 +379,13 @@ async def score_async(
                 # since the sample score carries the scorer name that generated
                 # it (so using sample.scores directly isn't enough)
                 sample_score, names = await _run_score_task(
-                    log, sample, resolved_scorers, active_model, active_roles, action
+                    log,
+                    sample,
+                    resolved_scorers,
+                    active_model,
+                    active_roles,
+                    action,
+                    metric_metadata,
                 )
 
             assert sample.scores is not None
@@ -397,6 +401,7 @@ async def score_async(
                 for idx_sample in range(total_samples)
             )
         )
+        metric_metadata.warn()
 
         # resolve the scorer metrics onto the scorers
         resolved_scorers = resolve_scorer_metrics(resolved_scorers, log_metrics) or []
@@ -548,6 +553,7 @@ async def _run_score_task(
     model: Model,
     model_roles: dict[str, Model | list[Model]],
     action: ScoreAction,
+    metric_metadata: MetricSampleMetadata,
 ) -> Tuple[dict[str, SampleScore], list[str]]:
     state, target, resolved_sample = task_state_from_sample(
         sample,
@@ -560,6 +566,7 @@ async def _run_score_task(
     if state.scores is None:
         state.scores = {}
     existing_score_names = [*state.scores]
+    sample_init = find_sample_init(sample.events)
 
     results: dict[str, SampleScore] = {}
     scorer_names: list[str] = []
@@ -623,7 +630,13 @@ async def _run_score_task(
                     results[scorer_name] = SampleScore(
                         score=score_result,
                         sample_id=state.sample_id,
-                        sample_metadata=sample_dataset_metadata(sample),
+                        sample_metadata=metric_metadata.metadata(
+                            declared_scorer=True,
+                            sample_id=sample.id,
+                            epoch=sample.epoch,
+                            sample_init=sample_init,
+                            final_metadata=state.metadata,
+                        ),
                         scorer=registry_unqualified_name(scorer),
                     )
 

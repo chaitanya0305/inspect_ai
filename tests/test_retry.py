@@ -25,8 +25,17 @@ from inspect_ai.log import (
 from inspect_ai.model import GenerateConfig, get_model
 from inspect_ai.model._model_info import clear_model_info_cache
 from inspect_ai.model._providers.mockllm import MockLLM
-from inspect_ai.scorer import exact
-from inspect_ai.solver import TaskState, generate, solver
+from inspect_ai.scorer import (
+    Score,
+    Scorer,
+    Target,
+    accuracy,
+    exact,
+    grouped,
+    scorer,
+    stderr,
+)
+from inspect_ai.solver import Generate, Solver, TaskState, generate, solver
 from inspect_ai.util import (
     ExecResult,
     SandboxEnvironment,
@@ -73,6 +82,81 @@ def test_eval_retryable():
 @task
 def mytask():
     return Task(name="custom-task-name", solver=[])
+
+
+_RELABEL_FAIL_FLAG = "INSPECT_TEST_RELABEL_FAIL_FLAG"
+
+
+@solver
+def relabel_category_fail_once() -> Solver:
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        flag = Path(os.environ[_RELABEL_FAIL_FLAG])
+        if state.sample_id == 4 and not flag.exists():
+            flag.touch()
+            raise RuntimeError("fail sample 4 on the first run")
+        state.metadata["category"] = "relabelled"
+        return state
+
+    return solve
+
+
+@scorer(metrics=[grouped(accuracy(), "category"), stderr(cluster="category")])
+def correct_for_odd_ids() -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        return Score(value="C" if state.sample_id in (1, 3) else "I")
+
+    return score
+
+
+@task
+def relabelled_category_task() -> Task:
+    return Task(
+        dataset=[
+            Sample(id=id, input="a", metadata={"category": category})
+            for id, category in [(1, "x"), (2, "y"), (3, "x"), (4, "y")]
+        ],
+        solver=relabel_category_fail_once(),
+        scorer=correct_for_odd_ids(),
+    )
+
+
+def test_eval_retry_reused_samples_group_by_dataset_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Samples reused by a retry give metrics the dataset metadata, as a fresh run does."""
+    flag = tmp_path / "failed_once"
+    monkeypatch.setenv(_RELABEL_FAIL_FLAG, str(flag))
+    flag.touch()
+    fresh = eval(
+        relabelled_category_task(),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "fresh"),
+    )[0]
+    flag.unlink()
+    log = eval(
+        relabelled_category_task(),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        fail_on_error=False,
+    )[0]
+    assert log.samples is not None
+    assert len([s for s in log.samples if s.error is None]) == 3
+
+    retried = eval_retry(log, log_dir=str(tmp_path / "logs"))[0]
+    assert retried.status == "success"
+    assert retried.results is not None
+    assert fresh.results is not None
+    metrics = retried.results.scores[0].metrics
+    assert {k: m.value for k, m in metrics.items()} == {
+        k: m.value for k, m in fresh.results.scores[0].metrics.items()
+    }
+    assert {k: metrics[k].value for k in ("x", "y", "all")} == {
+        "x": 1.0,
+        "y": 0.0,
+        "all": 0.5,
+    }
+    # two clusters (x, y); with the relabelled metadata there is one, giving 0
+    assert metrics["stderr"].value == pytest.approx(0.5)
 
 
 def test_eval_retry_with_task_name():

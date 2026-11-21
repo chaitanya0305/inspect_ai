@@ -72,6 +72,9 @@ class StreamedSample(NamedTuple):
     scores: dict[str, Score] | None
     """The full scores written to the sample."""
 
+    sample_init: SampleInitEvent | None
+    """The sample's `SampleInitEvent`, or None if events were not written."""
+
 
 def _write_sample_streaming(
     zip_log: "ZipLogFile",
@@ -403,4 +406,11 @@ def _write_sample_streaming(
     # ("we don't know") beats seeding it with a guess. The body keeps the
     # best-effort reconstruction.
 
-    return StreamedSample(summary=summary, metadata=sample_metadata, scores=scores)
+    # a sample written without events gives a later recompute_metrics() no
+    # sample_init event, so the recovered metrics don't use it either
+    return StreamedSample(
+        summary=summary,
+        metadata=sample_metadata,
+        scores=scores,
+        sample_init=sample_init if include_events else None,
+    )

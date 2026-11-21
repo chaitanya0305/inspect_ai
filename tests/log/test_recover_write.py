@@ -8,11 +8,13 @@ from zipfile import ZipFile
 
 from pydantic_core import to_jsonable_python
 
+from inspect_ai._eval.task.results import ScorerInfo
 from inspect_ai._util.asyncfiles import AsyncFilesystem
 from inspect_ai._util.constants import LOG_SCHEMA_VERSION
 from inspect_ai._util.content import ContentImage
 from inspect_ai._util.hash import mm3_hash
-from inspect_ai.event import ModelEvent
+from inspect_ai.dataset import Sample
+from inspect_ai.event import ModelEvent, SampleInitEvent
 from inspect_ai.log import read_eval_log_async
 from inspect_ai.log._condense import ATTACHMENT_PROTOCOL
 from inspect_ai.log._log import (
@@ -22,6 +24,7 @@ from inspect_ai.log._log import (
     EvalSample,
     EvalSpec,
 )
+from inspect_ai.log._metric import LogMetrics
 from inspect_ai.log._recorders.eval import LogStart
 from inspect_ai.log._recover import (
     CrashedEvalLog,
@@ -30,6 +33,7 @@ from inspect_ai.log._recover import (
 )
 from inspect_ai.model import ChatMessageUser, GenerateConfig, ModelCall
 from inspect_ai.model._model_output import ModelOutput, ModelUsage
+from inspect_ai.scorer import accuracy, grouped
 from inspect_ai.scorer._metric import Score
 
 
@@ -297,3 +301,49 @@ async def test_write_recovered_eval_log_keeps_genuine_references() -> None:
                 assert event.output.message.text == literal
                 assert event.call is not None
                 assert event.call.response == {"content": long_text}
+
+
+async def test_write_recovered_eval_log_metrics_group_by_dataset_metadata() -> None:
+    """Recovered metrics give declared scorers the dataset metadata, as the run did."""
+
+    def sample(id: int, category: str, value: str) -> EvalSample:
+        # a solver relabelled the category, so the final metadata differs
+        # from the dataset metadata in the sample_init event
+        return _make_sample(id).model_copy(
+            update=dict(
+                scores={"sc": Score(value=value)},
+                metadata={"category": "relabelled"},
+                events=[
+                    SampleInitEvent(
+                        sample=Sample(
+                            id=id, input=f"input {id}", metadata={"category": category}
+                        )
+                    )
+                ],
+            )
+        )
+
+    async with AsyncFilesystem():
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = os.path.join(temp_dir, "recovered.eval")
+            crashed = _make_crashed_log(temp_dir, samples=[sample(1, "x", "C")])
+            log = await write_recovered_eval_log(
+                crashed,
+                iter([(sample(2, "y", "I"), False)]),
+                output,
+                metrics=LogMetrics(
+                    reducers=None,
+                    metrics=None,
+                    scorers=[
+                        ScorerInfo(name="sc", metrics=[grouped(accuracy(), "category")])
+                    ],
+                ),
+            )
+
+            assert log.results is not None
+            metrics = log.results.scores[0].metrics
+            assert {k: m.value for k, m in metrics.items()} == {
+                "x": 1.0,
+                "y": 0.0,
+                "all": 0.5,
+            }

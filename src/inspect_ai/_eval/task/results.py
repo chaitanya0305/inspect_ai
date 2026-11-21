@@ -132,7 +132,7 @@ def eval_results(
     resolved_scorer_names = (
         set(scorer_names)
         if scorer_names is not None
-        else set(_unique_scorer_names(scorers_info))
+        else set(unique_scorer_names(scorers_info))
     )
 
     for sample_scores in scores:
@@ -304,7 +304,7 @@ def compute_eval_scores(
     return result_scores
 
 
-def _unique_scorer_names(scorers_info: list[ScorerInfo]) -> list[str]:
+def unique_scorer_names(scorers_info: list[ScorerInfo]) -> list[str]:
     """Mirror result score names so duplicate header scorers are accounted for."""
     scorer_names: list[str] = []
     for scorer_info in scorers_info:

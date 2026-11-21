@@ -130,8 +130,8 @@ from inspect_ai.log._log import (
     EvalSampleSummary,
     EvalStatus,
     eval_error,
-    sample_dataset_metadata,
 )
+from inspect_ai.log._metric_metadata import MetricSampleMetadata, find_sample_init
 from inspect_ai.log._recorders.buffer.transcript_history_provider import (
     BufferTranscriptHistoryProvider,
 )
@@ -1356,6 +1356,7 @@ async def task_run(options: TaskRunOptions, task_cancel: TaskCancel | None) -> E
         scorer_names = []
         for s in scorers:
             scorer_names.append(unique_scorer_name(s, scorer_names))
+    reused_metric_metadata = MetricSampleMetadata()
 
     scorer_profiles = (
         [registry_log_name(scorer) for scorer in scorers if is_registry_object(scorer)]
@@ -1730,13 +1731,18 @@ async def task_run(options: TaskRunOptions, task_cancel: TaskCancel | None) -> E
                                 condense_sample(previous_sample, log_images),
                                 flush=True,
                             )
+                        previous_init = find_sample_init(previous_sample.events)
                         sample_scores = (
                             {
                                 key: SampleScore(
                                     score=score,
                                     sample_id=previous_sample.id,
-                                    sample_metadata=sample_dataset_metadata(
-                                        previous_sample
+                                    sample_metadata=reused_metric_metadata.metadata(
+                                        declared_scorer=key in (scorer_names or []),
+                                        sample_id=previous_sample.id,
+                                        epoch=previous_sample.epoch,
+                                        sample_init=previous_init,
+                                        final_metadata=previous_sample.metadata,
                                     ),
                                     scorer=key,
                                 )
@@ -2273,6 +2279,7 @@ async def task_run(options: TaskRunOptions, task_cancel: TaskCancel | None) -> E
                 else:
                     keyed_results = await sample_scheduler.run(seed_plan, run_sample)
                 sample_results = list(keyed_results.values())
+                reused_metric_metadata.warn()
 
             # compute and record metrics if we have scores
             completed_scores = [
