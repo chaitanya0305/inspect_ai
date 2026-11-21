@@ -117,6 +117,9 @@ def match_str(
         v = strip_punctuation(v)
         t = strip_punctuation(t)
 
+    if numeric and t:
+        return answer, _match_text_at_number_boundary(v, t, location)
+
     # comparisons
     if location == "begin":
         return answer, v.startswith(t)
@@ -137,6 +140,28 @@ def match_str(
 # FULLWIDTH FULL STOP is excluded too: like ASCII ".", it is a decimal
 # separator ("．42" is 0.42).
 _NUMERIC_PUNCTUATION_TRIM = "!?:;()[]{}'\"`！？：；（）［］｛｝＇＂｀。「」『』【】"
+
+
+def _match_text_at_number_boundary(
+    value: str, target: str, location: Literal["begin", "end", "any", "exact"]
+) -> bool:
+    """Match a non-numeric target under `numeric=True` without splitting a number.
+
+    A target such as "60%" is compared as text, but a plain suffix, prefix or
+    substring test would accept "160%" (or "5%" in "25"), so the match may not
+    continue a digit run or decimal on the side where the target has a digit.
+    """
+    if location == "exact":
+        return value == target
+    before = r"(?<![\d.,])" if target[0].isdigit() else ""
+    after = r"(?![.,]?\d)" if target[-1].isdigit() else ""
+    pattern = before + re.escape(target) + after
+    if location == "begin":
+        return re.match(pattern, value) is not None
+    elif location == "end":
+        return re.search(pattern + r"\Z", value) is not None
+    else:
+        return re.search(pattern, value) is not None
 
 
 def _clean_numeric_word(s: str) -> str:

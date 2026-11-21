@@ -1,3 +1,5 @@
+from typing import Literal
+
 import pytest
 from test_helpers.utils import simple_task_state
 
@@ -49,6 +51,37 @@ async def test_non_numeric_match_plain():
     result = await scorer(state, Target(["32"]))
 
     assert result.text == CORRECT
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "model_output,target,location,expected",
+    [
+        # the documented Target(["60", "60%"]) recipe must not accept a number
+        # that merely ends (or starts) with the target's digits
+        ("The answer is 160%", ["60", "60%"], "end", INCORRECT),
+        ("The answer is 1,060%", ["60", "60%"], "end", INCORRECT),
+        ("The answer is 25", ["5", "5%"], "end", INCORRECT),
+        ("The answer is 6.5%", ["5", "5%"], "end", INCORRECT),
+        ("600% of the base", ["60", "60%"], "begin", INCORRECT),
+        ("It rose 160% overall", ["60", "60%"], "any", INCORRECT),
+        ("The answer is 60%", ["60", "60%"], "end", CORRECT),
+        ("The rate is 60%.", ["60", "60%"], "end", CORRECT),
+        ("60% of the base", ["60", "60%"], "begin", CORRECT),
+        ("It rose 60% overall", ["60", "60%"], "any", CORRECT),
+    ],
+)
+async def test_numeric_text_target_does_not_split_number(
+    model_output: str,
+    target: list[str],
+    location: Literal["begin", "end", "any"],
+    expected: str,
+) -> None:
+    scorer = match(numeric=True, location=location)
+    result = await scorer(simple_task_state(model_output=model_output), Target(target))
+
+    assert result is not None
+    assert result.text == expected
 
 
 @pytest.mark.anyio
