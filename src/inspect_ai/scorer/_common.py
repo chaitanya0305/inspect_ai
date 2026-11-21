@@ -153,7 +153,7 @@ def _match_text_at_number_boundary(
     """
     if location == "exact":
         return value == target
-    before = r"(?<![\d.,])" if target[0].isdigit() else ""
+    before = r"(?<!\d)(?<!\d[.,])" if target[0].isdigit() else ""
     after = r"(?![.,]?\d)" if target[-1].isdigit() else ""
     pattern = before + re.escape(target) + after
     if location == "begin":

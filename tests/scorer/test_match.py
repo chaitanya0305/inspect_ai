@@ -69,6 +69,7 @@ async def test_non_numeric_match_plain():
         ("The rate is 60%.", ["60", "60%"], "end", CORRECT),
         ("60% of the base", ["60", "60%"], "begin", CORRECT),
         ("It rose 60% overall", ["60", "60%"], "any", CORRECT),
+        ("Answers: 40%,60%", ["60", "60%"], "end", CORRECT),
     ],
 )
 async def test_numeric_text_target_does_not_split_number(
