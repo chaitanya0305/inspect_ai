@@ -2,17 +2,13 @@
 
 from typing import NamedTuple
 
-from inspect_ai._eval.task.results import (
-    ScorerInfo,
-    eval_results,
-    unique_scorer_names,
-)
+from inspect_ai._eval.task.results import ScorerInfo, eval_results
 from inspect_ai._util.registry import RegistryNameNotFound
 from inspect_ai.scorer._metric import Metric, SampleScore
 from inspect_ai.scorer._reducer import ScoreReducer, create_reducers
 
 from ._log import EvalLog
-from ._metric_metadata import MetricSampleMetadata, find_sample_init
+from ._metric_metadata import metric_sample_metadata, sample_scoring_record
 
 REDUCER_MISSING = (
     "Epoch reducer '{name}' (the log's epochs_reducer) could not be built: "
@@ -104,27 +100,20 @@ def compute_log_metrics(log: EvalLog, resolved: LogMetrics) -> None:
         raise ValueError("Log contains no samples")
 
     # Extract scores from all samples
-    declared_scorers = set(unique_scorer_names(resolved.scorers))
-    metric_metadata = MetricSampleMetadata()
     scores = []
     for sample in log.samples:
         if sample.scores:
-            sample_init = find_sample_init(sample.events)
+            record = sample_scoring_record(sample.events, sample.completed_at)
             sample_scores = {}
             for score_name, score in sample.scores.items():
                 sample_scores[score_name] = SampleScore(
                     score=score,
                     sample_id=sample.id,
-                    sample_metadata=metric_metadata.metadata(
-                        declared_scorer=score_name in declared_scorers,
-                        sample_id=sample.id,
-                        epoch=sample.epoch,
-                        sample_init=sample_init,
-                        final_metadata=sample.metadata,
+                    sample_metadata=metric_sample_metadata(
+                        score_name, record, sample.metadata
                     ),
                 )
             scores.append(sample_scores)
-    metric_metadata.warn()
 
     # Recompute
     results, reductions = eval_results(

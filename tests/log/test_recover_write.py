@@ -14,7 +14,7 @@ from inspect_ai._util.constants import LOG_SCHEMA_VERSION
 from inspect_ai._util.content import ContentImage
 from inspect_ai._util.hash import mm3_hash
 from inspect_ai.dataset import Sample
-from inspect_ai.event import ModelEvent, SampleInitEvent
+from inspect_ai.event import ModelEvent, SampleInitEvent, ScoreEvent
 from inspect_ai.log import read_eval_log_async
 from inspect_ai.log._condense import ATTACHMENT_PROTOCOL
 from inspect_ai.log._log import (
@@ -304,7 +304,7 @@ async def test_write_recovered_eval_log_keeps_genuine_references() -> None:
 
 
 async def test_write_recovered_eval_log_metrics_group_by_dataset_metadata() -> None:
-    """Recovered metrics give declared scorers the dataset metadata, as the run did."""
+    """Recovered metrics give scores from the run's scorers the dataset metadata."""
 
     def sample(id: int, category: str, value: str) -> EvalSample:
         # a solver relabelled the category, so the final metadata differs
@@ -318,7 +318,14 @@ async def test_write_recovered_eval_log_metrics_group_by_dataset_metadata() -> N
                         sample=Sample(
                             id=id, input=f"input {id}", metadata={"category": category}
                         )
-                    )
+                    ),
+                    # scored during the run, before the sample completed
+                    ScoreEvent(
+                        score=Score(value=value),
+                        scorer="sc",
+                        scorer_args={},
+                        timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                    ),
                 ],
             )
         )

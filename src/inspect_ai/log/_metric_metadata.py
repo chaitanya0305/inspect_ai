@@ -1,84 +1,94 @@
 """Sample metadata for metrics computed from logged samples."""
 
 from collections.abc import Sequence
+from datetime import datetime
 from logging import getLogger
-from typing import Any
+from typing import Any, NamedTuple
 
+from inspect_ai._util.logger import warn_once
 from inspect_ai.event._event import Event
 from inspect_ai.event._sample_init import SampleInitEvent
+from inspect_ai.event._score import ScoreEvent
 
 logger = getLogger(__name__)
 
-_MAX_SAMPLES_NAMED = 5
+
+class SampleScoringRecord(NamedTuple):
+    """What a logged sample's events record about how its scores were produced."""
+
+    sample_init: SampleInitEvent | None
+    """The sample's first `SampleInitEvent` (it holds the dataset metadata)."""
+
+    run_scorers: frozenset[str]
+    """Score names a scorer produced during the run, before the sample completed."""
 
 
-def find_sample_init(events: Sequence[Event]) -> SampleInitEvent | None:
-    """The sample's first `SampleInitEvent`, or None if it has none."""
-    return next((e for e in events if isinstance(e, SampleInitEvent)), None)
+def sample_scoring_record(
+    events: Sequence[Event], completed_at: str | None
+) -> SampleScoringRecord | None:
+    """Read a sample's scoring record from its events (None if it has none).
 
-
-class MetricSampleMetadata:
-    """Chooses the sample metadata that a logged score's metrics receive.
-
-    A fresh run gives the metrics of a declared scorer's score the dataset
-    metadata, and the metrics of a solver-set score the final
-    `TaskState.metadata`. A log records the final metadata as
-    `EvalSample.metadata` and the dataset metadata in the sample's first
-    `SampleInitEvent` (the event the shard merge in `log/_shards/_write.py`
-    also reads). Metrics recomputed from a log use the same inputs.
-
-    A sample logged without a `SampleInitEvent` (events excluded, or a sample
-    whose record could not be serialized) has no dataset metadata, so its
-    declared scorers' metrics fall back to the final metadata. That gives
-    different results from the run when a solver changed metadata a metric
-    reads (e.g. a `grouped()` or `cluster` key). `warn()` names such samples.
+    A score name counts as produced during the run when its last final
+    `ScoreEvent` names it, carries `scorer_args` (set for scorers, not for
+    scores a solver set in `state.scores`), and is no later than the sample's
+    `completed_at`. Scores added afterwards by `inspect score` are later.
     """
+    if not events:
+        return None
+    completed = datetime.fromisoformat(completed_at) if completed_at else None
+    sample_init: SampleInitEvent | None = None
+    last_scores: dict[str, ScoreEvent] = {}
+    for event in events:
+        if isinstance(event, SampleInitEvent) and sample_init is None:
+            sample_init = event
+        elif (
+            isinstance(event, ScoreEvent)
+            and not event.intermediate
+            and event.scorer is not None
+        ):
+            last_scores[event.scorer] = event
+    run_scorers = frozenset(
+        name
+        for name, event in last_scores.items()
+        if event.scorer_args is not None
+        and completed is not None
+        and event.timestamp <= completed
+    )
+    return SampleScoringRecord(sample_init=sample_init, run_scorers=run_scorers)
 
-    def __init__(self) -> None:
-        self._missing: dict[tuple[str, int | None], None] = {}
 
-    def metadata(
-        self,
-        *,
-        declared_scorer: bool,
-        sample_id: int | str,
-        epoch: int | None,
-        sample_init: SampleInitEvent | None,
-        final_metadata: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        """Sample metadata for the metrics of one of a sample's scores.
+def metric_sample_metadata(
+    score_name: str,
+    record: SampleScoringRecord | None,
+    final_metadata: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Sample metadata for the metrics of one of a logged sample's scores.
 
-        Args:
-            declared_scorer: Whether a scorer the task declares produced the
-                score (False for a score a solver set).
-            sample_id: Id of the sample.
-            epoch: Epoch of the sample.
-            sample_init: The sample's `SampleInitEvent` (`find_sample_init()`).
-            final_metadata: The sample's final metadata (`EvalSample.metadata`).
-        """
-        if not declared_scorer:
-            return final_metadata
-        if sample_init is None:
-            self._missing[(str(sample_id), epoch)] = None
-            return final_metadata
-        return sample_init.sample.metadata
+    Metrics get the metadata the score's producer saw. During a run, a
+    scorer's score goes to the metrics with the dataset metadata, recorded
+    by the sample's `SampleInitEvent` (as the shard merge in
+    `log/_shards/_write.py` reads it). A score a solver set, or one that
+    `inspect score` added later, goes with the final `TaskState.metadata`,
+    which the log records as `EvalSample.metadata`.
 
-    def warn(self) -> None:
-        """Log one warning naming the samples that fell back to final metadata."""
-        if not self._missing:
-            return
-        named = ", ".join(
-            f"{sample_id} (epoch {epoch})" if epoch is not None else sample_id
-            for sample_id, epoch in list(self._missing)[:_MAX_SAMPLES_NAMED]
+    A sample logged without events records neither, so its scores fall back
+    to the final metadata, with a warning: the results differ from the run's
+    if a solver changed metadata that a metric reads.
+
+    Args:
+        score_name: Name of the score in `EvalSample.scores`.
+        record: The sample's `sample_scoring_record()`.
+        final_metadata: The sample's final metadata (`EvalSample.metadata`).
+    """
+    if record is None:
+        warn_once(
+            logger,
+            "Samples logged without events don't record the dataset metadata, "
+            "so their metrics use the final sample metadata. Results differ "
+            "from the run's if a solver changed metadata that a metric reads "
+            "(such as a grouped() or cluster key).",
         )
-        more = len(self._missing) - _MAX_SAMPLES_NAMED
-        if more > 0:
-            named = f"{named} and {more} more"
-        logger.warning(
-            f"{len(self._missing)} sample(s) have no sample_init event: {named}. "
-            "Their scorers' metrics use the sample's final metadata instead of "
-            "the dataset metadata the run used, so the results differ from the "
-            "run's if a solver changed metadata that a metric reads (such as a "
-            "grouped() or cluster key)."
-        )
-        self._missing.clear()
+        return final_metadata
+    if record.sample_init is not None and score_name in record.run_scorers:
+        return record.sample_init.sample.metadata
+    return final_metadata

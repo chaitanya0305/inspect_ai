@@ -627,6 +627,7 @@ def _metric_values(log: EvalLog) -> dict[str, float]:
 # grouped by the dataset categories; the clustered stderr has two clusters
 # (with the relabelled metadata it has one, and is 0)
 DATASET_CATEGORY_METRICS = {"x": 1.0, "y": 0.0, "all": 0.5, "stderr": 0.5}
+FINAL_CATEGORY_METRICS = {"relabelled": 0.5, "all": 0.5, "stderr": 0.0}
 
 
 @pytest.mark.anyio
@@ -649,8 +650,44 @@ async def test_recomputed_metrics_group_by_dataset_metadata():
     edit_score(log, 1, "correct_for_sample_one", ScoreEdit(explanation="clarified"))
     assert _metric_values(log) == DATASET_CATEGORY_METRICS
 
+
+@pytest.mark.anyio
+async def test_posthoc_scores_keep_final_metadata():
+    """Scores added by score_async() use the final metadata, as their scorers saw it.
+
+    Also on a later recompute, including for a key only the final metadata has.
+    """
+    task = _category_task(
+        solver=solver_relabels_category(set_score=True),
+        scorer=correct_for_sample_one(),
+    )
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    assert log.samples is not None
+    for sample in log.samples:
+        sample.metadata["tool_used"] = sample.id == 1
+
+    @scorer(metrics=[grouped(accuracy(), "tool_used")])
+    def tool_scorer() -> Scorer:
+        async def score(state: TaskState, target: Target) -> Score:
+            return _score_for_sample_one(state)
+
+        return score
+
     rescored = await score_async(log, [correct_for_sample_one()], action="overwrite")
-    assert _metric_values(rescored) == DATASET_CATEGORY_METRICS
+    assert _metric_values(rescored) == FINAL_CATEGORY_METRICS
+    recompute_metrics(rescored)
+    assert _metric_values(rescored) == FINAL_CATEGORY_METRICS
+
+    appended = await score_async(rescored, [tool_scorer()], action="append")
+    assert appended.results is not None
+    tool_metrics = {"True": 1.0, "False": 0.0, "all": 0.5}
+    assert {
+        k: v.value for k, v in appended.results.scores[-1].metrics.items()
+    } == tool_metrics
+    recompute_metrics(appended)
+    assert {
+        k: v.value for k, v in appended.results.scores[-1].metrics.items()
+    } == tool_metrics
 
 
 @pytest.mark.anyio
@@ -669,10 +706,50 @@ async def test_recomputed_metrics_of_solver_set_scores_use_final_metadata():
 
 
 @pytest.mark.anyio
-async def test_recomputed_metrics_without_sample_init_warn(
-    caplog: pytest.LogCaptureFixture,
+async def test_posthoc_score_named_like_a_solver_set_score_keeps_final_metadata():
+    """A post-hoc score renamed to avoid a solver-set score keeps the final metadata."""
+
+    @solver
+    def relabel_and_set_scorer_named_score() -> Solver:
+        async def solve(state: TaskState, generate: Generate) -> TaskState:
+            state.metadata["category"] = "relabelled"
+            state.scores = {"correct_for_sample_one": _score_for_sample_one(state)}
+            return state
+
+        return solve
+
+    task = _category_task(
+        solver=relabel_and_set_scorer_named_score(),
+        metrics=[grouped(accuracy(), "category")],
+    )
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    log = await score_async(log, [correct_for_sample_one()], action="append")
+    assert log.samples is not None
+    assert sorted(log.samples[0].scores or {}) == [
+        "correct_for_sample_one",
+        "correct_for_sample_one1",
+    ]
+    assert log.results is not None
+    expected = {"relabelled": 0.5, "all": 0.5}
+    before = [_values(s.metrics) for s in log.results.scores]
+    assert before[0] == expected
+
+    recompute_metrics(log)
+    assert [_values(s.metrics) for s in log.results.scores] == before
+
+
+def _values(metrics: dict[str, Any]) -> dict[str, float]:
+    return {k: v.value for k, v in metrics.items() if k in ("relabelled", "all")}
+
+
+@pytest.mark.anyio
+async def test_recomputed_metrics_without_events_warn_once(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ):
-    """Samples without a sample_init event fall back to their final metadata, with a warning."""
+    """Samples logged without events fall back to their final metadata, with one warning."""
+    import inspect_ai._util.logger as util_logger
+
+    monkeypatch.setattr(util_logger, "_warned", [])
     task = _category_task(
         solver=solver_relabels_category(), scorer=correct_for_sample_one()
     )
@@ -683,14 +760,13 @@ async def test_recomputed_metrics_without_sample_init_warn(
 
     with caplog.at_level(logging.WARNING):
         recompute_metrics(log)
+        recompute_metrics(log)
 
-    assert _metric_values(log) == {"relabelled": 0.5, "all": 0.5, "stderr": 0.0}
+    assert _metric_values(log) == FINAL_CATEGORY_METRICS
     warnings = [
-        r.getMessage() for r in caplog.records if "sample_init" in r.getMessage()
+        r.getMessage() for r in caplog.records if "without events" in r.getMessage()
     ]
     assert len(warnings) == 1
-    assert "2 sample(s)" in warnings[0]
-    assert "1 (epoch 1), 2 (epoch 1)" in warnings[0]
 
 
 def test_resolve_scorers_info_loads_task_file_metrics_once(

@@ -37,6 +37,7 @@ from inspect_ai.log._log import (
     EvalSpec,
     EventsData,
 )
+from inspect_ai.log._metric_metadata import SampleScoringRecord, sample_scoring_record
 from inspect_ai.log._recorders.buffer.filestore import Manifest, SampleBufferFilestore
 from inspect_ai.log._recorders.eval import ZipLogFile, _sample_filename
 from inspect_ai.log._recorders.json_write import write_json_field
@@ -72,8 +73,8 @@ class StreamedSample(NamedTuple):
     scores: dict[str, Score] | None
     """The full scores written to the sample."""
 
-    sample_init: SampleInitEvent | None
-    """The sample's `SampleInitEvent`, or None if events were not written."""
+    scoring_record: SampleScoringRecord | None
+    """The sample's scoring record (None if its events were not written)."""
 
 
 def _write_sample_streaming(
@@ -134,6 +135,7 @@ def _write_sample_streaming(
 
     # Per-sample reconstruction state captured from raw events
     sample_init: SampleInitEvent | None = None
+    scoring_record: SampleScoringRecord | None = None
     sample_limit_event: SampleLimitEvent | None = None
     sample_limit_event_matching: SampleLimitEvent | None = None
     sample_metadata = buffer.read_sample_metadata(summary.id, summary.epoch, manifest)
@@ -235,6 +237,10 @@ def _write_sample_streaming(
             deduped_event_data = collapser.events()
 
             raw_events = validate_events([ed.event for ed in deduped_event_data])
+            # a sample written without events gives a later recompute_metrics()
+            # no record either, so the recovered metrics don't use it
+            if include_events:
+                scoring_record = sample_scoring_record(raw_events, summary.completed_at)
 
             for ev in raw_events:
                 if sample_init is None and isinstance(ev, SampleInitEvent):
@@ -406,11 +412,9 @@ def _write_sample_streaming(
     # ("we don't know") beats seeding it with a guess. The body keeps the
     # best-effort reconstruction.
 
-    # a sample written without events gives a later recompute_metrics() no
-    # sample_init event, so the recovered metrics don't use it either
     return StreamedSample(
         summary=summary,
         metadata=sample_metadata,
         scores=scores,
-        sample_init=sample_init if include_events else None,
+        scoring_record=scoring_record,
     )
