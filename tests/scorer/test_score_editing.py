@@ -1,6 +1,7 @@
 """Tests for score editing functionality."""
 
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ from inspect_ai import Epochs, Task, eval_async, task
 from inspect_ai._eval.score import score_async
 from inspect_ai._util.constants import get_deserializing_context
 from inspect_ai.dataset import MemoryDataset, Sample
+from inspect_ai.event._score import ScoreEvent
 from inspect_ai.event._score_edit import ScoreEditEvent
 from inspect_ai.log import (
     EvalLog,
@@ -20,6 +22,10 @@ from inspect_ai.log import (
 from inspect_ai.log._edit import ProvenanceData
 from inspect_ai.log._log import EvalMetricDefinition
 from inspect_ai.log._metric import recompute_metrics
+from inspect_ai.log._metric_metadata import (
+    metric_sample_metadata,
+    sample_scoring_record,
+)
 from inspect_ai.log._score import edit_score
 from inspect_ai.scorer import (
     Score,
@@ -649,6 +655,30 @@ async def test_recomputed_metrics_group_by_dataset_metadata():
     # a score edit that changes no value leaves the metrics as they were
     edit_score(log, 1, "correct_for_sample_one", ScoreEdit(explanation="clarified"))
     assert _metric_values(log) == DATASET_CATEGORY_METRICS
+
+
+@pytest.mark.anyio
+async def test_scores_after_completion_or_without_completed_at_use_final_metadata():
+    """Only a score produced no later than completed_at gets the dataset metadata."""
+    task = _category_task(
+        solver=solver_relabels_category(), scorer=correct_for_sample_one()
+    )
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    assert log.samples
+    sample = log.samples[0]
+    name = "correct_for_sample_one"
+
+    record = sample_scoring_record(sample.events, sample.completed_at)
+    assert metric_sample_metadata(name, record, sample.metadata) == {"category": "x"}
+
+    for event in sample.events:
+        if isinstance(event, ScoreEvent):
+            event.timestamp = event.timestamp + timedelta(days=1)
+    record = sample_scoring_record(sample.events, sample.completed_at)
+    assert metric_sample_metadata(name, record, sample.metadata) == sample.metadata
+
+    record = sample_scoring_record(sample.events, None)
+    assert metric_sample_metadata(name, record, sample.metadata) == sample.metadata
 
 
 @pytest.mark.anyio

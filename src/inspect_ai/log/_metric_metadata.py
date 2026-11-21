@@ -1,10 +1,10 @@
 """Sample metadata for metrics computed from logged samples."""
 
 from collections.abc import Sequence
-from datetime import datetime
 from logging import getLogger
 from typing import Any, NamedTuple
 
+from inspect_ai._util.dateutil import datetime_from_iso_format_safe
 from inspect_ai._util.logger import warn_once
 from inspect_ai.event._event import Event
 from inspect_ai.event._sample_init import SampleInitEvent
@@ -32,10 +32,13 @@ def sample_scoring_record(
     `ScoreEvent` names it, carries `scorer_args` (set for scorers, not for
     scores a solver set in `state.scores`), and is no later than the sample's
     `completed_at`. Scores added afterwards by `inspect score` are later.
+    Without `completed_at` (logs older than that field), or for logs whose
+    events lack `scorer_args`, no score counts as produced during the run, so
+    every score uses the final metadata, as before.
     """
     if not events:
         return None
-    completed = datetime.fromisoformat(completed_at) if completed_at else None
+    completed = datetime_from_iso_format_safe(completed_at) if completed_at else None
     sample_init: SampleInitEvent | None = None
     last_scores: dict[str, ScoreEvent] = {}
     for event in events:
@@ -73,7 +76,9 @@ def metric_sample_metadata(
 
     A sample logged without events records neither, so its scores fall back
     to the final metadata, with a warning: the results differ from the run's
-    if a solver changed metadata that a metric reads.
+    if a solver changed metadata that a metric reads. This includes
+    `inspect log recover --no-events`, which drops the events so that the
+    recovered metrics agree with a later `recompute_metrics()`.
 
     Args:
         score_name: Name of the score in `EvalSample.scores`.
