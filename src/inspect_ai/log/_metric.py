@@ -1,13 +1,18 @@
 """Score metrics recomputation functionality."""
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
-from inspect_ai._eval.task.results import ScorerInfo, eval_results
+from inspect_ai._eval.task.results import (
+    ScorerInfo,
+    _unique_scorer_names,
+    eval_results,
+)
 from inspect_ai._util.registry import RegistryNameNotFound
+from inspect_ai.event._sample_init import SampleInitEvent
 from inspect_ai.scorer._metric import Metric, SampleScore
 from inspect_ai.scorer._reducer import ScoreReducer, create_reducers
 
-from ._log import EvalLog
+from ._log import EvalLog, EvalSample
 
 REDUCER_MISSING = (
     "Epoch reducer '{name}' (the log's epochs_reducer) could not be built: "
@@ -15,6 +20,20 @@ REDUCER_MISSING = (
     "the module that defines it, first; the log's task file is not imported "
     "for reducers."
 )
+
+
+def scorer_sample_metadata(sample: EvalSample) -> dict[str, Any] | None:
+    """The sample metadata a fresh run gives its declared scorers' metrics.
+
+    A fresh run passes a declared scorer's score to the metrics with the
+    dataset sample's metadata, recorded by the sample's `SampleInitEvent`.
+    `sample.metadata` is the final `TaskState` metadata, which a solver may
+    have changed; it is used only when the sample has no such event.
+    """
+    for event in sample.events:
+        if isinstance(event, SampleInitEvent):
+            return event.sample.metadata
+    return sample.metadata
 
 
 class LogMetrics(NamedTuple):
@@ -99,15 +118,25 @@ def compute_log_metrics(log: EvalLog, resolved: LogMetrics) -> None:
         raise ValueError("Log contains no samples")
 
     # Extract scores from all samples
+    scorer_names = set(_unique_scorer_names(resolved.scorers))
     scores = []
     for sample in log.samples:
         if sample.scores:
-            sample_scores = {}
-            for score_name, score in sample.scores.items():
-                sample_scores[score_name] = SampleScore(
-                    score=score, sample_id=sample.id, sample_metadata=sample.metadata
-                )
-            scores.append(sample_scores)
+            # a solver-set score's metrics get the final metadata, as in a
+            # fresh run
+            scorer_metadata = scorer_sample_metadata(sample)
+            scores.append(
+                {
+                    score_name: SampleScore(
+                        score=score,
+                        sample_id=sample.id,
+                        sample_metadata=scorer_metadata
+                        if score_name in scorer_names
+                        else sample.metadata,
+                    )
+                    for score_name, score in sample.scores.items()
+                }
+            )
 
     # Recompute
     results, reductions = eval_results(

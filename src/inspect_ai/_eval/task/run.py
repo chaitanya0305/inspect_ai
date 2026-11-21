@@ -131,6 +131,7 @@ from inspect_ai.log._log import (
     EvalStatus,
     eval_error,
 )
+from inspect_ai.log._metric import scorer_sample_metadata
 from inspect_ai.log._recorders.buffer.transcript_history_provider import (
     BufferTranscriptHistoryProvider,
 )
@@ -1729,12 +1730,15 @@ async def task_run(options: TaskRunOptions, task_cancel: TaskCancel | None) -> E
                                 condense_sample(previous_sample, log_images),
                                 flush=True,
                             )
+                        scorer_metadata = scorer_sample_metadata(previous_sample)
                         sample_scores = (
                             {
                                 key: SampleScore(
                                     score=score,
                                     sample_id=previous_sample.id,
-                                    sample_metadata=previous_sample.metadata,
+                                    sample_metadata=scorer_metadata
+                                    if key in (scorer_names or [])
+                                    else previous_sample.metadata,
                                     scorer=key,
                                 )
                                 for key, score in previous_sample.scores.items()

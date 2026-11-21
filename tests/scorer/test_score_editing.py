@@ -25,6 +25,7 @@ from inspect_ai.scorer import (
     Target,
     accuracy,
     exact,
+    grouped,
     includes,
     match,
     mean,
@@ -160,6 +161,45 @@ async def test_recompute_single_metric():
 
     recompute_metrics(log)
     assert log.results.scores[0].metrics["mean"].value == 0.5
+
+
+@solver
+def relabel_category() -> Solver:
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        state.metadata["category"] = "relabelled"
+        return state
+
+    return solve
+
+
+@scorer(metrics=[grouped(mean(), "category")])
+def flag_scorer() -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        return Score(value=1.0 if state.metadata["flag"] else 0.0)
+
+    return score
+
+
+@pytest.mark.anyio
+async def test_recompute_groups_by_dataset_metadata():
+    """Recomputing groups scores by the metadata the eval grouped them by."""
+    dataset = [
+        Sample(
+            id=i,
+            input="x",
+            metadata={"category": "odd" if i % 2 else "even", "flag": i <= 2},
+        )
+        for i in range(1, 5)
+    ]
+    task = Task(dataset=dataset, solver=relabel_category(), scorer=flag_scorer())
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    assert log.results and log.samples
+    expected = {k: m.value for k, m in log.results.scores[0].metrics.items()}
+    assert expected == {"odd": 0.5, "even": 0.5, "all": 0.5}
+
+    edit_score(log, 1, "flag_scorer", ScoreEdit(explanation="clarified"))
+
+    assert {k: m.value for k, m in log.results.scores[0].metrics.items()} == expected
 
 
 @pytest.mark.anyio

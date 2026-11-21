@@ -25,8 +25,8 @@ from inspect_ai.log import (
 from inspect_ai.model import GenerateConfig, get_model
 from inspect_ai.model._model_info import clear_model_info_cache
 from inspect_ai.model._providers.mockllm import MockLLM
-from inspect_ai.scorer import exact
-from inspect_ai.solver import TaskState, generate, solver
+from inspect_ai.scorer import Score, Target, accuracy, exact, grouped, scorer
+from inspect_ai.solver import Generate, TaskState, generate, solver
 from inspect_ai.util import (
     ExecResult,
     SandboxEnvironment,
@@ -103,6 +103,64 @@ def hello_world():
         solver=[generate()],
         scorer=exact(),
     )
+
+
+@solver
+def relabel_and_fail_once(marker: str | None):
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        state.metadata["category"] = "relabelled"
+        # a file marks the failure: eval_retry imports this module again
+        if marker is not None and state.sample_id == 4 and not os.path.exists(marker):
+            Path(marker).touch()
+            raise RuntimeError("transient")
+        return state
+
+    return solve
+
+
+@scorer(metrics=[grouped(accuracy(), "category")])
+def flag_scorer():
+    async def score(state: TaskState, target: Target) -> Score:
+        return Score(value=1.0 if state.metadata["flag"] else 0.0)
+
+    return score
+
+
+@task
+def relabelling_task(marker: str | None = None):
+    return Task(
+        dataset=[
+            Sample(
+                id=i,
+                input="x",
+                metadata={"category": "odd" if i % 2 else "even", "flag": i <= 2},
+            )
+            for i in range(1, 5)
+        ],
+        solver=relabel_and_fail_once(marker),
+        scorer=flag_scorer(),
+    )
+
+
+def test_eval_retry_reused_samples_group_by_dataset_metadata(tmp_path: Path):
+    # a solver that changes the metadata a metric groups by: the reused
+    # samples must be grouped as a fresh run groups them
+    fresh = eval(relabelling_task(), model="mockllm/model", log_dir=str(tmp_path))[0]
+    log = eval(
+        relabelling_task(marker=str(tmp_path / "failed")),
+        model="mockllm/model",
+        fail_on_error=False,
+        log_dir=str(tmp_path),
+    )[0]
+    assert log.samples and any(sample.error for sample in log.samples)
+
+    retried = eval_retry(log, log_dir=str(tmp_path))[0]
+
+    assert retried.status == "success"
+    assert retried.results and fresh.results
+    metrics = {k: m.value for k, m in retried.results.scores[0].metrics.items()}
+    assert metrics == {k: m.value for k, m in fresh.results.scores[0].metrics.items()}
+    assert metrics == {"odd": 0.5, "even": 0.5, "all": 0.5}
 
 
 def test_eval_retry_with_model_generate_config():
