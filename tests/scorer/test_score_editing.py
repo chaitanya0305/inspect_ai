@@ -25,6 +25,7 @@ from inspect_ai.scorer import (
     Target,
     accuracy,
     exact,
+    grouped,
     includes,
     match,
     mean,
@@ -579,6 +580,56 @@ async def test_recompute_metrics_when_task_has_no_scorers():
 
     assert log.results.scores[0].name == "custom_key"
     assert log.results.scores[0].metrics["mean"].value == 0.75  # (0 + 1 + 1 + 1) / 4
+
+
+@solver
+def solver_relabels_category() -> Solver:
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        state.metadata["category"] = "relabelled"
+        return state
+
+    return solve
+
+
+@scorer(metrics=[grouped(accuracy(), "category")])
+def correct_for_sample_one() -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        return Score(value="C" if state.sample_id == 1 else "I")
+
+    return score
+
+
+def _grouped_values(log: EvalLog) -> dict[str, float]:
+    assert log.results is not None
+    return {k: v.value for k, v in log.results.scores[0].metrics.items()}
+
+
+@pytest.mark.anyio
+async def test_recomputed_metrics_group_by_dataset_metadata():
+    """Metrics recomputed from a log group samples as the run did.
+
+    A solver changing the grouping key in TaskState.metadata changes the
+    logged sample metadata, but the run's metrics used the dataset metadata.
+    """
+    task = Task(
+        dataset=MemoryDataset(
+            [
+                Sample(id=1, input="a", metadata={"category": "x"}),
+                Sample(id=2, input="b", metadata={"category": "y"}),
+            ]
+        ),
+        solver=solver_relabels_category(),
+        scorer=correct_for_sample_one(),
+    )
+    log = (await eval_async(task, model="mockllm/model"))[0]
+    expected = {"x": 1.0, "y": 0.0, "all": 0.5}
+    assert _grouped_values(log) == expected
+
+    recompute_metrics(log)
+    assert _grouped_values(log) == expected
+
+    rescored = await score_async(log, [correct_for_sample_one()], action="overwrite")
+    assert _grouped_values(rescored) == expected
 
 
 def test_resolve_scorers_info_loads_task_file_metrics_once(

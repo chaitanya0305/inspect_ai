@@ -7,7 +7,7 @@ from inspect_ai._util.registry import RegistryNameNotFound
 from inspect_ai.scorer._metric import Metric, SampleScore
 from inspect_ai.scorer._reducer import ScoreReducer, create_reducers
 
-from ._log import EvalLog
+from ._log import EvalLog, sample_dataset_metadata
 
 REDUCER_MISSING = (
     "Epoch reducer '{name}' (the log's epochs_reducer) could not be built: "
@@ -105,7 +105,9 @@ def compute_log_metrics(log: EvalLog, resolved: LogMetrics) -> None:
             sample_scores = {}
             for score_name, score in sample.scores.items():
                 sample_scores[score_name] = SampleScore(
-                    score=score, sample_id=sample.id, sample_metadata=sample.metadata
+                    score=score,
+                    sample_id=sample.id,
+                    sample_metadata=sample_dataset_metadata(sample),
                 )
             scores.append(sample_scores)
 

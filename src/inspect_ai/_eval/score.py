@@ -68,7 +68,11 @@ from inspect_ai.log._condense import (
     resolve_sample_attachments,
 )
 from inspect_ai.log._headline import headline_metric_ref, resolve_headline_metric
-from inspect_ai.log._log import EvalMetricDefinition, EvalSample
+from inspect_ai.log._log import (
+    EvalMetricDefinition,
+    EvalSample,
+    sample_dataset_metadata,
+)
 from inspect_ai.log._resolve import rebind_sample_timelines
 from inspect_ai.log._score import _find_scorers_span
 from inspect_ai.log._transcript import Transcript, init_transcript, transcript
@@ -619,7 +623,7 @@ async def _run_score_task(
                     results[scorer_name] = SampleScore(
                         score=score_result,
                         sample_id=state.sample_id,
-                        sample_metadata=state.metadata,
+                        sample_metadata=sample_dataset_metadata(sample),
                         scorer=registry_unqualified_name(scorer),
                     )
 

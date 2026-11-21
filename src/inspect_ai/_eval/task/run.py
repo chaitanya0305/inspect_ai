@@ -130,6 +130,7 @@ from inspect_ai.log._log import (
     EvalSampleSummary,
     EvalStatus,
     eval_error,
+    sample_dataset_metadata,
 )
 from inspect_ai.log._recorders.buffer.transcript_history_provider import (
     BufferTranscriptHistoryProvider,
@@ -1734,7 +1735,9 @@ async def task_run(options: TaskRunOptions, task_cancel: TaskCancel | None) -> E
                                 key: SampleScore(
                                     score=score,
                                     sample_id=previous_sample.id,
-                                    sample_metadata=previous_sample.metadata,
+                                    sample_metadata=sample_dataset_metadata(
+                                        previous_sample
+                                    ),
                                     scorer=key,
                                 )
                                 for key, score in previous_sample.scores.items()
